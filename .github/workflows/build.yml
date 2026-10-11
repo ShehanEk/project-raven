@@ -1,0 +1,43 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y xvfb libegl1 libxkbcommon-x11-0 libxcb-cursor0
+      - run: pip install -e ".[dev]"
+      - run: xvfb-run -a pytest -q
+
+  package:
+    needs: test
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pyinstaller --noconfirm packaging/raven.spec
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        run: cd dist && ditto -c -k --keepParent Raven.app Raven-macOS.zip
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist/Raven -DestinationPath dist/Raven-Windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Raven-${{ runner.os }}
+          path: dist/Raven-*.zip
