@@ -15,6 +15,7 @@ from websockets.exceptions import ConnectionClosed
 
 from raven import PROTOCOL_VERSION, protocol, security
 from raven.config import SettingsStore, local_os
+from raven.host.files import FileError, FileService
 from raven.platform import netinfo, power
 from raven.platform.capture import Monitor, ScreenCapturer
 from raven.platform.inputs import InputInjector
@@ -182,6 +183,7 @@ class _Session:
         self.stream_task: asyncio.Task | None = None
         self.in_flight = 0
         self.acked = asyncio.Event()
+        self.files = FileService(self.send, ws.send, server.on_event, client_name)
 
     @property
     def settings(self):
@@ -192,6 +194,17 @@ class _Session:
 
     async def send(self, msg: dict) -> None:
         await self.ws.send(protocol.encode(msg))
+
+    async def reply(self, request: dict, payload: dict | None = None, error: str | None = None) -> None:
+        """Answer a request that carried a ``rid``; requests without one get no reply."""
+        rid = request.get("rid")
+        if not isinstance(rid, int):
+            return
+        msg = {"type": "reply", "rid": rid, "ok": error is None}
+        if error is not None:
+            msg["error"] = error
+        msg.update(payload or {})
+        await self.send(msg)
 
     async def run(self) -> None:
         try:
@@ -211,10 +224,16 @@ class _Session:
                 "monitors": [{"index": m.index, "width": m.width, "height": m.height} for m in self.monitors],
                 "allow_input": self.settings.allow_input,
                 "allow_power": self.settings.allow_power,
+                "allow_files": self.settings.allow_files,
             },
         })
         async for raw in self.ws:
             if isinstance(raw, bytes):
+                if protocol.frame_kind(raw) == protocol.FRAME_KIND_CHUNK and self.settings.allow_files:
+                    try:
+                        await self.files.handle_chunk(*protocol.unpack_chunk(raw))
+                    except Exception:  # noqa: BLE001
+                        log.exception("error writing upload chunk")
                 continue
             try:
                 msg = protocol.decode(raw)
@@ -233,13 +252,15 @@ class _Session:
             self.in_flight = max(0, self.in_flight - 1)
             self.acked.set()
         elif kind == "ping":
-            await self.send({"type": "pong", "t": msg.get("t")})
+            await self.send({"type": "pong", "t": msg.get("t"), **({"rid": msg["rid"]} if "rid" in msg else {})})
         elif kind == "stream_start":
             await self.start_stream(msg)
         elif kind == "stream_stop":
             await self.stop_stream()
         elif kind == "power":
-            await self.handle_power(str(msg.get("action", "")))
+            await self.handle_power(str(msg.get("action", "")), msg.get("rid"))
+        elif kind.startswith("fs_"):
+            await self.handle_files(msg)
         elif kind in _INPUT_MESSAGES:
             if not self.settings.allow_input:
                 return
@@ -263,17 +284,32 @@ class _Session:
             if text:
                 inj.type_text(text)
 
-    async def handle_power(self, action: str) -> None:
+    async def handle_files(self, msg: dict) -> None:
+        if not self.settings.allow_files:
+            await self.reply(msg, error="File transfer is turned off on this computer.")
+            return
+        try:
+            payload = await self.files.handle(msg)
+        except FileError as exc:
+            await self.reply(msg, error=str(exc))
+        except (OSError, ValueError, TypeError) as exc:
+            await self.reply(msg, error=f"File operation failed: {exc}")
+        else:
+            await self.reply(msg, payload)
+
+    async def handle_power(self, action: str, rid=None) -> None:
+        extra = {"rid": rid} if isinstance(rid, int) else {}
         if action not in power.ACTIONS:
-            await self.send({"type": "power_result", "action": action, "ok": False, "error": "Unknown action."})
+            await self.send({"type": "power_result", "action": action, "ok": False,
+                             "error": "Unknown action.", **extra})
             return
         if not self.settings.allow_power:
             await self.send({
                 "type": "power_result", "action": action, "ok": False,
-                "error": "Power control is turned off on this computer.",
+                "error": "Power control is turned off on this computer.", **extra,
             })
             return
-        await self.send({"type": "power_result", "action": action, "ok": True})
+        await self.send({"type": "power_result", "action": action, "ok": True, **extra})
         self.server.on_event("power", {"action": action, "client": self.client_name})
         # Give the reply a moment to reach the controller before we go dark.
         asyncio.get_running_loop().call_later(
@@ -353,6 +389,7 @@ class _Session:
 
     async def cleanup(self) -> None:
         await self.stop_stream()
+        await self.files.close()
         with contextlib.suppress(Exception):
             self.injector.release_all()
         await asyncio.get_running_loop().run_in_executor(self.executor, self.capturer.close)

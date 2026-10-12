@@ -186,6 +186,27 @@ QWidget#viewerBar QLabel {{ color: #e8eaf0; }}
 QWidget#viewerBar QLabel[role="muted"] {{ color: #8d95a8; }}
 QWidget#viewerBar QToolButton#iconButton:hover {{ background: #232833; }}
 QWidget#viewerBar QComboBox {{ background: #171a21; border-color: #2a2f3b; color: #e8eaf0; padding: 4px 8px; }}
+QTreeWidget {{
+    background: {p.surface}; border: 1px solid {p.border}; border-radius: 12px; padding: 4px;
+    alternate-background-color: {p.surface};
+}}
+QTreeWidget::item {{ height: 32px; border: none; padding-left: 4px; }}
+QTreeWidget::item:hover {{ background: {p.surface_alt}; }}
+QTreeWidget::item:selected {{ background: {p.soft('accent', 0.22)}; color: {p.text}; }}
+QHeaderView {{ background: transparent; border: none; }}
+QHeaderView::section {{
+    background: {p.surface}; color: {p.muted}; border: none; border-bottom: 1px solid {p.border};
+    padding: 6px 8px; font-size: 12px; font-weight: 600;
+}}
+QListWidget#placesList {{ background: transparent; border: none; }}
+QListWidget#placesList::item {{ height: 34px; padding-left: 8px; border-radius: 8px; color: {p.muted}; }}
+QListWidget#placesList::item:hover {{ background: {p.surface_alt}; color: {p.text}; }}
+QListWidget#placesList::item:selected {{ background: {p.soft('accent')}; color: {p.accent_hover if p.dark else p.accent}; }}
+QProgressBar {{ background: {p.surface_alt}; border: none; border-radius: 3px; max-height: 6px; min-height: 6px; }}
+QProgressBar::chunk {{ background: {p.accent}; border-radius: 3px; }}
+QFrame#transferRow {{ background: {p.surface}; border: 1px solid {p.border}; border-radius: 12px; }}
+QFrame#dropHint {{ background: {p.soft('accent', 0.12)}; border: 2px dashed {p.accent}; border-radius: 16px; }}
+QFrame#banner {{ background: {p.soft('danger', 0.14)}; border: 1px solid {p.soft('danger', 0.4)}; border-radius: 10px; }}
 QFrame#overlayCard {{ background: {p.surface}; border: 1px solid {p.border}; border-radius: 16px; }}
 """
 

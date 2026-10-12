@@ -236,6 +236,11 @@ class HostPage(QWidget):
         perms.body.addWidget(SettingRow("power", "Power controls",
                                         "Sleep, lock, restart and shut down this computer.", self.allow_power))
         perms.body.addWidget(divider())
+        self.allow_files = self._switch(host.allow_files, lambda on: self._set("allow_files", on))
+        perms.body.addWidget(SettingRow("files", "File transfer",
+                                        "Browse this computer's files, and send files to and from it.",
+                                        self.allow_files))
+        perms.body.addWidget(divider())
         self.advertise = self._switch(host.advertise, self._advertise_changed)
         perms.body.addWidget(SettingRow("wifi", "Visible on the network",
                                         "Appear automatically in Raven on your other computers.", self.advertise))
@@ -447,6 +452,8 @@ class HostPage(QWidget):
             "auth_failed": ("alert", "Wrong password from {address}", "warning"),
             "rejected": ("alert", "Refused {address}: {reason}", "warning"),
             "power": ("power", "{client} requested {action}", "accent"),
+            "file_received": ("download", "Received {name} from {client}", "accent"),
+            "file_sent": ("upload", "{client} downloaded {name}", "accent"),
             "error": ("alert", "{message}", "danger"),
         }.get(kind)
         if not spec:
@@ -454,7 +461,7 @@ class HostPage(QWidget):
         icon_name, template, role = spec
         text = template.format(**detail)
         self._add_activity(icon_name, text, role)
-        if kind in ("connected", "auth_failed", "power"):
+        if kind in ("connected", "auth_failed", "power", "file_received"):
             self.notify.emit("Raven", text)
 
     def _add_activity(self, icon_name: str, text: str, role: str = "accent") -> None:

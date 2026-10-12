@@ -52,6 +52,7 @@ class HostSettings:
     password_verifier: str = ""
     allow_input: bool = True
     allow_power: bool = True
+    allow_files: bool = True
     advertise: bool = True
 
     @property

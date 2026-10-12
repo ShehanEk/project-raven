@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -30,12 +31,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from raven.client.files import FileClient
 from raven.client.session import RemoteSession
 from raven.config import RemoteHost, local_os
 from raven.gui.async_bridge import AsyncRunner
+from raven.gui.files_window import FilesWindow
 from raven.gui import icons
 from raven.gui.keymap import key_name, swap_command_and_control
 from raven.gui.theme import theme
+from raven.gui.transfers import TransferList, drop_hint
 from raven.gui.widgets import Avatar, IconButton, StatusDot, Toast, button, label
 
 QUALITY_PRESETS = {
@@ -55,6 +59,7 @@ class ScreenView(QWidget):
     """Paints the remote frame and turns local input into protocol messages."""
 
     send = Signal(dict)
+    files_dropped = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,6 +67,10 @@ class ScreenView(QWidget):
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         self.setMinimumSize(320, 200)
+        self.setAcceptDrops(True)
+        self.drop_overlay = drop_hint("Drop to send to the other computer's Downloads folder")
+        self.drop_overlay.setParent(self)
+        self.drop_overlay.hide()
         self.image: QImage | None = None
         self.remote_cursor = (-1.0, -1.0)
         self.message = "Connecting…"
@@ -218,6 +227,31 @@ class ScreenView(QWidget):
     def leaveEvent(self, event) -> None:  # noqa: N802
         self.update()
 
+    # ---------------------------------------------------------- drag & drop
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        if urls and all(u.isLocalFile() for u in urls):
+            event.acceptProposedAction()
+            self.drop_overlay.setGeometry(self.rect().adjusted(40, 40, -40, -40))
+            self.drop_overlay.raise_()
+            self.drop_overlay.show()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self.drop_overlay.hide()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        self.drop_overlay.hide()
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        if paths:
+            event.acceptProposedAction()
+            self.files_dropped.emit(paths)
+
     # ---------------------------------------------------------- keyboard
 
     def focusNextPrevChild(self, next: bool) -> bool:  # noqa: N802, A002
@@ -324,6 +358,7 @@ class ViewerWindow(QMainWindow):
         layout.addWidget(self._build_bar())
         self.view = ScreenView()
         self.view.send.connect(self._send)
+        self.view.files_dropped.connect(lambda paths: self.send_files([Path(p) for p in paths]))
         layout.addWidget(self.view, 1)
         self.setCentralWidget(central)
         self.view.swap_cmd_ctrl = self.swap.isChecked()
@@ -334,6 +369,18 @@ class ViewerWindow(QMainWindow):
 
         self.toast = Toast(self.view)
         self.overlay = _OverlayCard(self.view, self._reconnect, self.close)
+        self.file_client = FileClient(session)
+        self.files_window: FilesWindow | None = None
+        self.remote_downloads: str | None = None
+        self.transfer_card = QFrame(self.view)
+        self.transfer_card.setObjectName("overlayCard")
+        tc = QVBoxLayout(self.transfer_card)
+        tc.setContentsMargins(10, 10, 10, 10)
+        self.transfers = TransferList(runner)
+        self.transfers.changed.connect(self._place_transfer_card)
+        self.transfers.job_finished.connect(self._transfer_finished)
+        tc.addWidget(self.transfers)
+        self.transfer_card.hide()
 
         self.frame_ready.connect(self.view.set_frame)
         self.frame_ready.connect(self._count_frame)
@@ -436,6 +483,12 @@ class ViewerWindow(QMainWindow):
         self.swap.setChecked((self.remote.os == "macos") != (local_os() == "macos"))
         self.swap.toggled.connect(lambda on: setattr(self.view, "swap_cmd_ctrl", on))
 
+        files = tool("files", "Files — browse and transfer files")
+        files.clicked.connect(self.open_files)
+        files.setEnabled(self.info.get("allow_files", True))
+        if not files.isEnabled():
+            files.setToolTip("File transfer is turned off on that computer")
+
         paste = tool("clipboard", "Type your clipboard text on the remote computer")
         paste.clicked.connect(self._type_clipboard)
 
@@ -497,6 +550,57 @@ class ViewerWindow(QMainWindow):
         self.showFullScreen() if on else self.showNormal()
         self.view.setFocus()
 
+    def open_files(self) -> None:
+        if not self.connected:
+            return
+        if self.files_window is None:
+            self.files_window = FilesWindow(self.runner, self.session, self.remote, owns_session=False)
+            self.files_window.destroyed.connect(lambda *_: setattr(self, "files_window", None))
+        self.files_window.show()
+        self.files_window.raise_()
+        self.files_window.activateWindow()
+
+    def send_files(self, paths: list[Path]) -> None:
+        if not self.connected:
+            return
+        if not self.info.get("allow_files", True):
+            self.toast.show_message("File transfer is turned off on that computer", "error")
+            return
+
+        async def destination() -> str:
+            if self.remote_downloads is None:
+                self.remote_downloads = (await self.file_client.places()).get("downloads", "")
+            return self.remote_downloads
+
+        def start(folder: str) -> None:
+            self.transfers.upload(self.file_client, paths, folder, "Downloads")
+
+        self.runner.run(destination(), start,
+                        lambda exc: self.toast.show_message(f"Can't send files: {exc}", "error", 5000))
+
+    def _place_transfer_card(self) -> None:
+        rows = self.transfers.rows()
+        if not rows:
+            self.transfer_card.hide()
+            return
+        self.transfer_card.setFixedWidth(380)
+        self.transfer_card.adjustSize()
+        view = self.view
+        self.transfer_card.move(view.width() - self.transfer_card.width() - 16,
+                                view.height() - self.transfer_card.height() - 16)
+        self.transfer_card.raise_()
+        self.transfer_card.show()
+
+    def _transfer_finished(self, direction: str, ok: bool) -> None:
+        if ok:
+            self.toast.show_message(f"Sent to {self.remote.name}'s Downloads folder", "success")
+        QTimer.singleShot(6000, self._dismiss_finished_transfers)
+
+    def _dismiss_finished_transfers(self) -> None:
+        for row in self.transfers.rows():
+            if row.done and row.detail.text() == "Done":
+                row.deleteLater()
+
     def _type_clipboard(self) -> None:
         text = QGuiApplication.clipboard().text()
         if text:
@@ -555,10 +659,15 @@ class ViewerWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        if self.transfer_card.isVisible():
+            self._place_transfer_card()
         if self.overlay.isVisible():
             self.overlay.recenter()
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if self.files_window is not None:
+            self.files_window.close()
+        self.transfers.cancel_all()
         self._alive = False
         self._fps_timer.stop()
         if self.connected:

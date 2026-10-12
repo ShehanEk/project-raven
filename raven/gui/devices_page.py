@@ -28,6 +28,7 @@ from raven.discovery import Browser, DiscoveredHost
 from raven.gui import icons
 from raven.gui.async_bridge import AsyncRunner
 from raven.gui.connect_flow import ConnectFlow
+from raven.gui.files_window import FilesWindow
 from raven.gui.theme import theme
 from raven.gui.viewer import POWER_LABELS, ViewerWindow
 from raven.gui.widgets import (
@@ -178,6 +179,8 @@ class DeviceCard(Card):
             footer.addWidget(power)
             more = IconButton("more", "More")
             more_menu = QMenu(more)
+            files_action = more_menu.addAction("Files…", lambda: page.open_files(device.remote))
+            files_action.setIcon(icons.icon("files", theme.palette.text, 16))
             wake_action = more_menu.addAction("Wake (Wake-on-LAN)", lambda: page.wake(device.remote))
             wake_action.setIcon(icons.icon("zap", theme.palette.text, 16))
             wake_action.setEnabled(bool(remote.mac))
@@ -234,6 +237,7 @@ class DevicesPage(QWidget):
         self.reachable: dict[str, bool] = {}  # remote id -> last probe result
         self.busy: dict[str, str] = {}  # remote id -> what we're doing
         self.viewers: list[ViewerWindow] = []
+        self.file_windows: list[FilesWindow] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(36, 32, 36, 24)
@@ -444,6 +448,22 @@ class DevicesPage(QWidget):
 
         self._with_session(remote, ready)
 
+    def open_files(self, remote: RemoteHost) -> None:
+        def ready(session: RemoteSession, info: dict) -> None:
+            if not info.get("allow_files", True):
+                self.toast.emit(f"File transfer is turned off on {remote.name}", "error")
+                self.runner.submit(session.close())
+                return
+            window = FilesWindow(self.runner, session, remote, owns_session=True)
+            self.file_windows.append(window)
+            window.destroyed.connect(
+                lambda *_: self.file_windows.remove(window) if window in self.file_windows else None)
+            window.show()
+            window.raise_()
+            window.activateWindow()
+
+        self._with_session(remote, ready)
+
     def power(self, remote: RemoteHost, action: str) -> None:
         label_text = POWER_LABELS[action]
         if action in ("restart", "shutdown"):
@@ -491,7 +511,7 @@ class DevicesPage(QWidget):
 
     def shutdown(self) -> None:
         self._probe_timer.stop()
-        for viewer in list(self.viewers):
-            viewer.close()
+        for window in [*self.viewers, *self.file_windows]:
+            window.close()
         if self.browser:
             self.browser.close()

@@ -1,5 +1,7 @@
 import pytest
 
+pytest_plugins = ["tests.support"]
+
 
 @pytest.fixture(autouse=True)
 def raven_home(tmp_path, monkeypatch):

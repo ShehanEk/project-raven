@@ -65,7 +65,15 @@ class RemoteSession:
         self.ws: ClientConnection | None = None
         self.hello: HostHello | None = None
         self.info: dict = {}
+        self.on_frame: FrameCallback | None = None
+        self.closed_reason: str | None = None
         self._receiver: asyncio.Task | None = None
+        self._listeners: list[MessageCallback] = []
+        self._close_listeners: list[ClosedCallback] = []
+        self._pending: dict[int, asyncio.Future] = {}
+        self._transfers: dict[int, asyncio.Queue] = {}
+        self._next_rid = 0
+        self._next_tid = 0
 
     async def connect(self) -> HostHello:
         try:
@@ -118,6 +126,9 @@ class RemoteSession:
             await self.close()
             raise AuthError(msg.get("error", "Authentication failed."))
         self.info = msg.get("info", {})
+        # From here on one task reads everything and routes it: screen frames,
+        # replies to requests, file chunks and unsolicited messages.
+        self._receiver = asyncio.create_task(self._read_loop())
         return self.info
 
     async def _recv_json(self, timeout: float = CONNECT_TIMEOUT) -> dict:
@@ -136,25 +147,99 @@ class RemoteSession:
         if self.ws:
             await self.ws.send(protocol.encode(msg))
 
-    def start_receiving(self, on_frame: FrameCallback, on_message: MessageCallback, on_closed: ClosedCallback) -> None:
-        self._receiver = asyncio.create_task(self._receive(on_frame, on_message, on_closed))
+    async def send_bytes(self, data: bytes) -> None:
+        if self.ws:
+            await self.ws.send(data)
 
-    async def _receive(self, on_frame: FrameCallback, on_message: MessageCallback, on_closed: ClosedCallback):
+    @property
+    def is_closed(self) -> bool:
+        return self.closed_reason is not None
+
+    # ------------------------------------------------------------ routing
+
+    def start_receiving(self, on_frame: FrameCallback, on_message: MessageCallback, on_closed: ClosedCallback) -> None:
+        """Register the viewer's callbacks (kept for the viewer's convenience)."""
+        self.on_frame = on_frame
+        self.add_listener(on_message)
+        self.add_close_listener(on_closed)
+
+    def add_listener(self, callback: MessageCallback) -> None:
+        self._listeners.append(callback)
+
+    def remove_listener(self, callback: MessageCallback) -> None:
+        if callback in self._listeners:
+            self._listeners.remove(callback)
+
+    def add_close_listener(self, callback: ClosedCallback) -> None:
+        if self.closed_reason is not None:
+            callback(self.closed_reason)
+        else:
+            self._close_listeners.append(callback)
+
+    def remove_close_listener(self, callback: ClosedCallback) -> None:
+        if callback in self._close_listeners:
+            self._close_listeners.remove(callback)
+
+    def new_transfer_id(self) -> int:
+        self._next_tid += 1
+        return self._next_tid
+
+    def open_transfer(self, tid: int) -> asyncio.Queue:
+        """Queue receiving the chunks (bytes) and the final fs_done/fs_error (dict) for ``tid``."""
+        queue: asyncio.Queue = asyncio.Queue()
+        self._transfers[tid] = queue
+        return queue
+
+    def close_transfer(self, tid: int) -> None:
+        self._transfers.pop(tid, None)
+
+    async def request(self, msg: dict, timeout: float = 20) -> dict:
+        """Send ``msg`` and wait for the host's reply; raise RavenError on failure."""
+        if self.closed_reason is not None:
+            raise RavenError(self.closed_reason)
+        self._next_rid += 1
+        rid = self._next_rid
+        future = asyncio.get_running_loop().create_future()
+        self._pending[rid] = future
+        try:
+            await self.send({**msg, "rid": rid})
+            reply = await asyncio.wait_for(future, timeout)
+        except asyncio.TimeoutError as exc:
+            raise RavenError("The other computer did not answer.") from exc
+        except ConnectionClosed as exc:
+            raise RavenError("Connection closed.") from exc
+        finally:
+            self._pending.pop(rid, None)
+        if reply.get("ok") is False:
+            raise RavenError(reply.get("error") or "The request failed.")
+        return reply
+
+    async def _read_loop(self) -> None:
         reason = "Disconnected."
         try:
             async for raw in self.ws:
                 if isinstance(raw, bytes):
+                    await self._on_binary(raw)
+                    continue
+                try:
+                    msg = protocol.decode(raw)
+                except ValueError:
+                    continue
+                rid = msg.get("rid")
+                if rid in self._pending:
+                    future = self._pending.pop(rid)
+                    if not future.done():
+                        future.set_result(msg)
+                    continue
+                tid = msg.get("tid")
+                if msg["type"] in ("fs_done", "fs_error") and tid in self._transfers:
+                    self._transfers[tid].put_nowait(msg)
+                    continue
+                for listener in list(self._listeners):
                     try:
-                        jpeg, cursor = protocol.unpack_frame(raw)
+                        listener(msg)
                     except Exception:  # noqa: BLE001
-                        continue
-                    on_frame(jpeg, cursor)
-                    await self.send({"type": "ack"})
-                else:
-                    try:
-                        on_message(protocol.decode(raw))
-                    except ValueError:
-                        continue
+                        log.exception("message listener failed")
         except ConnectionClosed as exc:
             if exc.rcvd and exc.rcvd.reason:
                 reason = exc.rcvd.reason
@@ -165,25 +250,62 @@ class RemoteSession:
             log.exception("receive loop failed")
             reason = str(exc)
         finally:
-            on_closed(reason)
+            self._finish(reason)
+
+    async def _on_binary(self, raw: bytes) -> None:
+        kind = protocol.frame_kind(raw)
+        if kind == protocol.FRAME_KIND_JPEG:
+            try:
+                jpeg, cursor = protocol.unpack_frame(raw)
+            except Exception:  # noqa: BLE001
+                return
+            if self.on_frame:
+                self.on_frame(jpeg, cursor)
+            await self.send({"type": "ack"})
+        elif kind == protocol.FRAME_KIND_CHUNK:
+            tid, data = protocol.unpack_chunk(raw)
+            queue = self._transfers.get(tid)
+            if queue is not None:
+                queue.put_nowait(data)
+
+    def _finish(self, reason: str) -> None:
+        if self.closed_reason is not None:
+            return
+        self.closed_reason = reason
+        error = RavenError(f"Connection lost: {reason}")
+        for future in self._pending.values():
+            if not future.done():
+                future.set_exception(error)
+        self._pending.clear()
+        for queue in self._transfers.values():
+            queue.put_nowait({"type": "fs_error", "error": f"Connection lost: {reason}"})
+        for callback in list(self._close_listeners):
+            try:
+                callback(reason)
+            except Exception:  # noqa: BLE001
+                log.exception("close listener failed")
+
+    # ------------------------------------------------------------ commands
+
+    async def ping(self) -> float:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await self.request({"type": "ping"})
+        return loop.time() - started
 
     async def power(self, action: str, timeout: float = 10) -> None:
         """Send a power command and wait for the host to accept it."""
-        await self.send({"type": "power", "action": action})
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while True:
-            msg = await self._recv_json(timeout=max(0.1, deadline - loop.time()))
-            if msg["type"] == "power_result" and msg.get("action") == action:
-                if not msg.get("ok"):
-                    raise RavenError(msg.get("error", f"{action} failed."))
-                return
+        reply = await self.request({"type": "power", "action": action}, timeout)
+        if not reply.get("ok"):
+            raise RavenError(reply.get("error", f"{action} failed."))
 
     async def close(self) -> None:
-        if self._receiver and self._receiver is not asyncio.current_task():
-            self._receiver.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._receiver
         if self.ws:
             with contextlib.suppress(Exception):
                 await self.ws.close()
+        if self._receiver and self._receiver is not asyncio.current_task():
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.wait_for(asyncio.shield(self._receiver), 3)
+            if not self._receiver.done():
+                self._receiver.cancel()
+        self._finish("Closed.")

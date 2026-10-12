@@ -336,6 +336,7 @@ class Toast(QFrame):
         self.anim.finished.connect(self._finished)
         self.timer = QTimer(self, singleShot=True)
         self.timer.timeout.connect(self._fade_out)
+        self.bottom_offset = 24
         self.hide()
 
     def show_message(self, text: str, kind: str = "success", ms: int = 3500) -> None:
@@ -354,7 +355,7 @@ class Toast(QFrame):
 
     def _place(self) -> None:
         host = self.parentWidget()
-        self.move((host.width() - self.width()) // 2, host.height() - self.height() - 24)
+        self.move((host.width() - self.width()) // 2, host.height() - self.height() - self.bottom_offset)
 
     def _fade_out(self) -> None:
         self.anim.stop()

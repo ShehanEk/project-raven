@@ -4,6 +4,8 @@ Control your own Windows PCs and Macs from each other, **over your local network
 
 - **See the remote desktop** live and **control its mouse and keyboard**
 - **Sleep, lock, restart or shut down** a remote computer with one click
+- **Transfer files** both ways: browse the remote computer's folders, download files or
+  whole folders, upload into any folder, or drop files onto the remote screen
 - **Wake** a sleeping or powered-off computer with Wake-on-LAN
 - Finds other Raven computers on the network automatically (Bonjour/mDNS)
 - One app on every machine. Each computer can control others, be controlled, or both
@@ -30,6 +32,7 @@ The interface follows your system's light or dark mode. Set `RAVEN_THEME=light` 
 │ Viewer window    │ ◀── JPEG frames (mss) ───────── │ screen capture         │
 │ mouse / keyboard │ ─── input events ─────────────▶ │ pynput input injection │
 │ power buttons    │ ─── sleep / shutdown ─────────▶ │ OS power commands      │
+│ files window     │ ◀── file chunks (SHA-256) ────▶ │ file service           │
 └──────────────────┘ ◀── Bonjour "_raven._tcp" ──────└────────────────────────┘
         └──── Wake-on-LAN magic packet (UDP broadcast) ──▶ powered-off host
 ```
@@ -95,10 +98,31 @@ The viewer window's top bar shows the connection's frame rate and resolution, pl
 | Sliders | Fast / Balanced / Sharp: trade image quality for smoothness |
 | Eye | View only: watch without sending mouse or keyboard input |
 | ⌘ | Swap Mac Command ↔ PC Control, so ⌘C copies on a PC (on by default between a Mac and a PC) |
+| Files | Opens the file browser for that computer |
 | Clipboard | Types your local clipboard text on the remote computer |
 | Corners | Full screen |
 | Power | Sleep / Lock / Restart / Shut Down |
 | ✕ | Disconnect. If the connection drops, a **Reconnect** button appears |
+
+### Transferring files
+
+- **File browser:** click the **Files** button in the viewer, or **⋯ → Files…** on a
+  device card. Browse the other computer's folders from its *Places* sidebar
+  (Home, Desktop, Documents, Downloads, drives).
+  - **Download** copies the selected files or folders here. Double-clicking a file
+    saves it straight to your Downloads folder.
+  - **Upload files…** / **Upload folder…** sends into the folder you're viewing, or drop
+    files from your desktop onto the list.
+- **Quick send:** drag files onto the remote screen in the viewer, and they land in that
+  computer's **Downloads** folder.
+
+Folders are copied with everything inside them. Each transfer shows its progress and speed
+and can be cancelled. Every file is checked with a SHA-256 checksum on arrival. A file is
+written to a hidden `.raven-part` file first and gets its real name only once it's
+complete, so a cancelled transfer never leaves half a file behind. Existing files are
+never overwritten: a second copy is saved as `name (2).ext`.
+
+![Files window](docs/screenshots/files-dark.png)
 
 ### Wake-on-LAN (turning computers back on)
 
@@ -132,9 +156,12 @@ raven wake a4:83:e7:12:34:56     # send Wake-on-LAN
   the derived key, not the password.
 - **Brute-force protection.** After 5 wrong passwords, that address is locked out for a
   minute.
-- **Host stays in charge.** The host can turn off mouse/keyboard control or power
-  commands, sees an activity log with a notification for every connection, and can
-  disconnect everyone.
+- **Host stays in charge.** The host can turn off mouse/keyboard control, power
+  commands or file transfer. It sees an activity log with a notification for every
+  connection and every file it receives, and can disconnect everyone.
+- **File access** has the same rights as the logged-in user on the host. Someone who can
+  control the mouse and keyboard could reach those files anyway. Uploaded file names are
+  reduced to a single safe name, so a name can't place a file outside the chosen folder.
 
 Settings and certificates live in `%APPDATA%\Raven` (Windows),
 `~/Library/Application Support/Raven` (macOS) or `~/.config/raven` (Linux).
@@ -149,7 +176,8 @@ Settings and certificates live in `%APPDATA%\Raven` (Windows),
   System-wide shortcuts such as ⌘Tab or ⌘Space go to your local Mac, not the remote one.
 - The host must be logged in, because Raven runs in the user's session. The login
   screen after a restart can't be controlled yet.
-- No audio or file transfer yet.
+- No audio yet. File transfer can't copy files the logged-in user can't read, and it
+  doesn't copy file permissions or timestamps.
 
 ## Development
 
@@ -161,10 +189,13 @@ pytest            # on headless Linux: xvfb-run -a pytest
 ```
 raven/
   host/server.py       host: TLS WebSocket server, auth, streaming, input, power
+  host/files.py        host: folder listing, uploads, downloads
+  client/files.py      controller: upload/download with progress, folders, checksums
   host/service.py      server + Bonjour advertisement
   client/session.py    controller: connect, verify fingerprint, authenticate
   platform/            capture (mss), inputs (pynput), power, permissions, netinfo
   gui/                 Qt app: sidebar window, Devices and This computer pages, viewer,
+                       files window, transfer progress,
                        theme (light/dark stylesheet), icons, custom widgets
   protocol.py          message and frame formats
   security.py          certificates, password proofs, LAN checks
