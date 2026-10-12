@@ -227,6 +227,10 @@ Settings and certificates live in `%APPDATA%\Raven` (Windows),
 | [Protocol](docs/PROTOCOL.md) | Every message and binary format on the wire, the handshake and proof, limits, close codes, mDNS and Wake-on-LAN formats |
 | [Tech stack](docs/TECH_STACK.md) | Libraries and versions, OS APIs used per platform, why each technology was chosen, licensing notes for distributors |
 
+The project website lives in [`site/`](site/). The `pages` workflow publishes it to
+GitHub Pages at <https://shehanek.github.io/project-raven/> whenever it changes on
+`main` (once Pages is enabled with source *GitHub Actions*).
+
 ## Development
 
 ```bash
