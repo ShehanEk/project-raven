@@ -519,11 +519,13 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 28px; align-items: cent
       <div class="platform-notes">
         <div class="note">
           <h3>Windows</h3>
-          <p>Unzip the folder and open <b>Raven.exe</b>. The app is not code-signed yet, so SmartScreen may say it is unrecognised: choose <b>More info</b>, then <b>Run anyway</b>.</p>
+          <p>Unzip the folder and open <b>Raven.exe</b>. The app is not code-signed yet, so SmartScreen may say <b>Windows protected your PC</b>: choose <b>More info</b>, then <b>Run anyway</b>.</p>
+          <p>Allow Raven on private networks when Windows Firewall asks.</p>
         </div>
         <div class="note">
           <h3>macOS</h3>
-          <p>Unzip, drag <b>Raven.app</b> to Applications, then <b>right-click it and choose Open</b> the first time, because the app is not notarized yet. Allow Screen Recording and Accessibility when asked.</p>
+          <p>Unzip and drag <b>Raven.app</b> to Applications. The app is not notarized yet, so the first launch shows <b>&ldquo;Raven&rdquo; Not Opened</b>. Click <b>Done</b>, then open <b>System Settings &rarr; Privacy &amp; Security</b>, scroll to <b>Security</b>, click <b>Open Anyway</b> next to Raven and confirm.</p>
+          <p>On macOS 14 or earlier, right-click the app and choose <b>Open</b> instead. Then allow Screen Recording and Accessibility when asked.</p>
         </div>
       </div>
       <p class="fine">Prefer to build it yourself, or use another system? <a href="#start">Install from source</a> or see all versions on the <a href="https://github.com/ShehanEk/project-raven/releases">releases page</a>.</p>

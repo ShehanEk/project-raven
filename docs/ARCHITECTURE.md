@@ -501,7 +501,7 @@ is on.
 - **Website**: the static site in `site/` (plain HTML and CSS, no build step) is served
   by Vercel via `vercel.json`; there is no workflow for it.
 - **Not code-signed.** The bundles aren't signed or notarized yet. macOS needs
-  right-click → Open the first time, and Screen Recording/Accessibility grants are tied
+  *Open Anyway* in Privacy & Security the first time, and Screen Recording/Accessibility grants are tied
   to the binary's signature, so re-grant them after each rebuild.
 
 ## Testing
