@@ -57,7 +57,9 @@ raven            # or: python -m raven
 Ready-made apps: download `Raven-Windows.zip` (`Raven.exe`) or `Raven-macOS.zip`
 (`Raven.app`) from the [latest release](https://github.com/ShehanEk/project-raven/releases/latest)
 or the project website. They aren't code-signed yet: on Windows choose *More info → Run anyway*
-in SmartScreen, on macOS right-click the app and choose *Open* the first time.
+in SmartScreen, on macOS open *System Settings → Privacy & Security* and click *Open Anyway*
+the first time (right-click → Open on macOS 14 or earlier). Details are in
+[docs/BUILDING.md](docs/BUILDING.md).
 
 Step-by-step instructions for building each app yourself are in
 [docs/BUILDING.md](docs/BUILDING.md).

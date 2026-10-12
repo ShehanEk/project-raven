@@ -70,9 +70,14 @@ cd dist && ditto -c -k --keepParent Raven.app Raven-macOS.zip && cd ..
 
 Unzip on the other Mac and drag `Raven.app` into Applications.
 
-**First run:** the app isn't notarized, so Gatekeeper blocks a double-click. Right-click
-`Raven.app`, choose **Open**, then **Open** again. If macOS says the app is damaged (this
-happens to zips sent through a browser or chat), clear the download flag:
+**First run:** the app isn't notarized, so Gatekeeper blocks it with *"Raven" Not Opened*.
+
+- **macOS 15 or later:** click **Done**, open **System Settings → Privacy & Security**,
+  scroll to **Security**, click **Open Anyway** next to Raven, then confirm with your
+  password or Touch ID. Right-click → Open no longer works on these versions.
+- **macOS 14 or earlier:** right-click `Raven.app`, choose **Open**, then **Open** again.
+- **Any version, from Terminal:** clear the download flag, then open the app normally.
+  This also fixes *"Raven" is damaged* (it happens to zips sent through a browser or chat):
 
 ```bash
 xattr -cr /Applications/Raven.app
