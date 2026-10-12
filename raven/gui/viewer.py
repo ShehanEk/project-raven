@@ -145,7 +145,7 @@ class ScreenView(QWidget):
             p.setBrush(Qt.BrushStyle.NoBrush)
             arc = QRectF(box.left() + 20, box.center().y() - 8, 16, 16)
             p.drawArc(arc, int(-angle * 16), 270 * 16)
-            QTimer.singleShot(16, self.update)
+            QTimer.singleShot(16, self, self.update)
         p.setPen(QColor(232, 234, 240))
         p.drawText(box.adjusted(44 if self.image is None else 24, 0, -24, 0),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap,
@@ -607,7 +607,7 @@ class ViewerWindow(QMainWindow):
     def _transfer_finished(self, direction: str, ok: bool) -> None:
         if ok:
             self.toast.show_message(f"Sent to {self.remote.name}'s Downloads folder", "success")
-        QTimer.singleShot(6000, self._dismiss_finished_transfers)
+        QTimer.singleShot(6000, self, self._dismiss_finished_transfers)
 
     def _dismiss_finished_transfers(self) -> None:
         for row in self.transfers.rows():

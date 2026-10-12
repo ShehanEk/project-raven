@@ -284,7 +284,7 @@ class DevicesPage(QWidget):
         self._probe_timer.start()
         theme.changed.connect(self.refresh)
         self.refresh()
-        QTimer.singleShot(300, self.probe_all)
+        QTimer.singleShot(300, self, self.probe_all)
 
     def _empty_state(self) -> QWidget:
         box = QFrame()
@@ -489,7 +489,7 @@ class DevicesPage(QWidget):
                 self.toast.emit(f"{label_text} sent to {remote.name}", "success")
                 if action in ("sleep", "shutdown", "restart"):
                     self.reachable[remote.id] = False
-                    QTimer.singleShot(5000, self.probe_all)
+                    QTimer.singleShot(5000, self, self.probe_all)
 
             def failed(exc):
                 self._set_busy(remote, None)
@@ -510,7 +510,7 @@ class DevicesPage(QWidget):
             return
         self.toast.emit(f"Wake signal sent to {remote.name}", "success")
         for delay in (5000, 15000, 30000):
-            QTimer.singleShot(delay, self.probe_all)
+            QTimer.singleShot(delay, self, self.probe_all)
 
     def shutdown(self) -> None:
         self._probe_timer.stop()

@@ -30,6 +30,14 @@ def app():
     return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def _delete_leftover_widgets():
+    yield
+    if QtWidgets.QApplication.instance() is not None:
+        for widget in QtWidgets.QApplication.topLevelWidgets():
+            _destroy(widget)
+
+
 def _hello(**overrides):
     msg = {"type": "hello", "version": 1, "name": "Office PC", "os": "windows",
            "salt": "ab" * 16, "iterations": security.PBKDF2_ITERATIONS, "nonce": protocol.b64(b"n" * 32)}
@@ -259,6 +267,17 @@ def test_advertisements_do_not_rewrite_saved_devices(app, tmp_path):
     finally:
         page.shutdown()
         runner.shutdown()
+        _destroy(page)
+
+
+def _destroy(widget):
+    """Delete a widget now, while Qt is running; leaving it to Python's exit
+    cleanup can crash the interpreter on the way out."""
+    import gc
+
+    widget.deleteLater()
+    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    gc.collect()
 
 
 def test_rate_limiter_has_a_host_wide_budget():
