@@ -26,6 +26,9 @@ answers while screen frames keep flowing.
 
 File transfer (see raven/host/files.py) uses fs_* requests plus binary
 chunk messages: a header with kind 2 and a 32-bit transfer id, then data.
+Clipboard sync uses clipboard_sync / clipboard_set / clipboard (raven/clip.py).
+
+docs/PROTOCOL.md is the complete reference; keep it in sync with changes here.
 """
 
 from __future__ import annotations

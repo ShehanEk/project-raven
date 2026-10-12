@@ -34,12 +34,13 @@ The interface follows your system's light or dark mode. Set `RAVEN_THEME=light` 
 │ mouse / keyboard │ ─── input events ─────────────▶ │ pynput input injection │
 │ power buttons    │ ─── sleep / shutdown ─────────▶ │ OS power commands      │
 │ files window     │ ◀── file chunks (SHA-256) ────▶ │ file service           │
+│ clipboard sync   │ ◀── text / images ────────────▶ │ clipboard hub          │
 └──────────────────┘ ◀── Bonjour "_raven._tcp" ──────└────────────────────────┘
         └──── Wake-on-LAN magic packet (UDP broadcast) ──▶ powered-off host
 ```
 
-Built with Python, PySide6 (Qt) for the UI, `websockets` + TLS for transport, `mss` for
-screen capture, `pynput` for mouse and keyboard, and `zeroconf` for discovery.
+Built with Python and PySide6 (Qt), `websockets` over TLS, `mss`, `pynput` and
+`zeroconf`. See the [documentation](#documentation) for the details.
 
 ## Install and run (from source)
 
@@ -199,7 +200,8 @@ raven wake a4:83:e7:12:34:56     # send Wake-on-LAN
 
 The `tests/test_attacks.py` suite (attacks against a live host) and
 `tests/test_client_safety.py` (protection of the controller) keep these guarantees from
-regressing.
+regressing. The full threat model and a table of the controls are in
+[Architecture → Security](docs/ARCHITECTURE.md#security-architecture).
 
 Settings and certificates live in `%APPDATA%\Raven` (Windows),
 `~/Library/Application Support/Raven` (macOS) or `~/.config/raven` (Linux).
@@ -217,27 +219,33 @@ Settings and certificates live in `%APPDATA%\Raven` (Windows),
 - No audio yet. File transfer can't copy files the logged-in user can't read, and it
   doesn't copy file permissions or timestamps.
 
+## Documentation
+
+| Document | What's in it |
+|---|---|
+| [Architecture](docs/ARCHITECTURE.md) | Components and code map, threading model, connection lifecycle, how streaming, input, power, file transfer, clipboard sync and discovery work, the security model, settings, UI structure, design decisions, how to extend Raven |
+| [Protocol](docs/PROTOCOL.md) | Every message and binary format on the wire, the handshake and proof, limits, close codes, mDNS and Wake-on-LAN formats |
+| [Tech stack](docs/TECH_STACK.md) | Libraries and versions, OS APIs used per platform, why each technology was chosen, licensing notes for distributors |
+
+The project website lives in [`site/`](site/). The `pages` workflow publishes it to
+GitHub Pages at <https://shehanek.github.io/project-raven/> whenever it changes on
+`main` (once Pages is enabled with source *GitHub Actions*).
+
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest            # on headless Linux: xvfb-run -a pytest
+pytest                       # on headless Linux: xvfb-run -a pytest
+pyinstaller --noconfirm packaging/raven.spec
 ```
 
-```
-raven/
-  host/server.py       host: TLS WebSocket server, auth, streaming, input, power
-  host/files.py        host: folder listing, uploads, downloads
-  client/files.py      controller: upload/download with progress, folders, checksums
-  host/clipboard.py    host: clipboard watcher shared by synced sessions
-  clip.py              clipboard contents on the wire (text / PNG image)
-  host/service.py      server + Bonjour advertisement
-  client/session.py    controller: connect, verify fingerprint, authenticate
-  platform/            capture (mss), inputs (pynput), power, permissions, netinfo
-  gui/                 Qt app: sidebar window, Devices and This computer pages, viewer,
-                       files window, transfer progress,
-                       theme (light/dark stylesheet), icons, custom widgets
-  protocol.py          message and frame formats
-  security.py          certificates, password proofs, LAN checks
-  discovery.py, wol.py, autostart.py, cli.py
-```
+- **Code layout:** `raven/host` (server side), `raven/client` (controller side),
+  `raven/platform` (OS integration, no Qt) and `raven/gui` (the Qt app). See the
+  [code map](docs/ARCHITECTURE.md#code-map).
+- **Tests:** 130 tests, including `tests/test_attacks.py` (attacks against a live host)
+  and `tests/test_client_safety.py` (protections of the controller).
+- **CI:** every pull request runs the tests on Ubuntu, then packages Windows and macOS
+  builds.
+
+Before adding a message type, a permission or UI that shows data from another computer,
+read [Extending Raven](docs/ARCHITECTURE.md#extending-raven).
