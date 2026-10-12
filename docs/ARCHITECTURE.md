@@ -498,8 +498,8 @@ is on.
      `Raven-macOS.zip` as artifacts. Runs only if `test` passes.
   3. `release`: only on a `v*` tag. Attaches both zips to a GitHub Release, which the
      website's download buttons point at (`releases/latest/download/<file>`).
-- **Website** (`.github/workflows/pages.yml`): publishes the static site in `site/`
-  (plain HTML and CSS, no build step) to GitHub Pages when it changes on `main`.
+- **Website**: the static site in `site/` (plain HTML and CSS, no build step) is served
+  by Vercel via `vercel.json`; there is no workflow for it.
 - **Not code-signed.** The bundles aren't signed or notarized yet. macOS needs
   right-click → Open the first time, and Screen Recording/Accessibility grants are tied
   to the binary's signature, so re-grant them after each rebuild.
