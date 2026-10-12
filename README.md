@@ -11,6 +11,17 @@ Control your own Windows PCs and Macs from each other, **over your local network
 Nothing goes through the internet: there are no accounts, cloud relays or port forwarding.
 The host refuses any connection that doesn't come from a private LAN address.
 
+![Devices page](docs/screenshots/devices-dark.png)
+
+<details><summary>“This computer” page (light theme)</summary>
+
+![This computer page](docs/screenshots/this-computer-light.png)
+
+</details>
+
+The interface follows your system's light or dark mode. Set `RAVEN_THEME=light` or
+`RAVEN_THEME=dark` to override it.
+
 ## How it works
 
 ```
@@ -50,16 +61,16 @@ pyinstaller --noconfirm packaging/raven.spec     # → dist/Raven/ or dist/Raven
 
 ### On each computer you want to control (the host)
 
-1. Open Raven → **This computer** tab.
-2. Tick **Allow other computers on my network to control this computer** and choose a
-   password.
-3. Optional: tick **Start Raven when I log in** so the computer is reachable again after
+1. Open Raven → **This computer**.
+2. Turn on **Remote access** and choose a password. The page then shows this computer's
+   address and fingerprint, with copy buttons.
+3. Optional: turn on **Start at login** so the computer is reachable again after
    a restart. Closing the window keeps Raven running in the tray/menu bar while remote
    control is on.
 
 **macOS:** grant Raven (or Terminal/Python when running from source) both
 **Screen Recording** and **Accessibility** in *System Settings → Privacy & Security*, then
-restart Raven. The tab has buttons that open those pages. The first remote *Shut down* or
+restart Raven. The page has buttons that open those settings. The first remote *Shut down* or
 *Restart* also asks you to allow Raven to control *System Events*.
 
 **Windows:** allow Raven through Windows Defender Firewall on **Private** networks when
@@ -67,23 +78,27 @@ prompted.
 
 ### On the computer you control from (the controller)
 
-1. Open Raven → **Other computers**. Hosts on the network appear automatically. Use
-   **Add…** to enter an IP address if one doesn't show up.
-2. Select a computer and press **Connect** to see and control it, or use **Sleep**,
-   **Lock**, **Restart**, **Shut Down** directly.
+1. Open Raven → **Devices**. Each computer shows as a card with an online/offline status.
+   Computers on the network appear automatically. Use **Add device** to enter an IP address
+   if one doesn't show up.
+2. Press **Connect** on a card to see and control that computer. The moon button puts it
+   to sleep, and the power button holds Lock, Restart and Shut Down. Offline computers
+   get a **Wake** button once Raven knows their MAC address.
 3. The first time, Raven shows the host's fingerprint. Check that it matches the one on
-   that computer's *This computer* tab. Then enter the password, which can be remembered.
+   that computer's *This computer* page. Then enter the password, which can be remembered.
 
-In the viewer window:
+The viewer window's top bar shows the connection's frame rate and resolution, plus:
 
 | Control | What it does |
 |---|---|
-| Display | Pick which monitor to view |
-| Fast / Balanced / Sharp | Trade image quality for smoothness |
-| View only | Watch without sending mouse or keyboard input |
-| Swap ⌘/Ctrl | Mac Command ↔ PC Control, so ⌘C copies on a PC (on by default between a Mac and a PC) |
-| Type clipboard | Types your local clipboard text on the remote computer |
+| Display menu | Pick which monitor to view (shown when the host has more than one) |
+| Sliders | Fast / Balanced / Sharp: trade image quality for smoothness |
+| Eye | View only: watch without sending mouse or keyboard input |
+| ⌘ | Swap Mac Command ↔ PC Control, so ⌘C copies on a PC (on by default between a Mac and a PC) |
+| Clipboard | Types your local clipboard text on the remote computer |
+| Corners | Full screen |
 | Power | Sleep / Lock / Restart / Shut Down |
+| ✕ | Disconnect. If the connection drops, a **Reconnect** button appears |
 
 ### Wake-on-LAN (turning computers back on)
 
@@ -149,7 +164,8 @@ raven/
   host/service.py      server + Bonjour advertisement
   client/session.py    controller: connect, verify fingerprint, authenticate
   platform/            capture (mss), inputs (pynput), power, permissions, netinfo
-  gui/                 Qt app: main window, host tab, remote tab, viewer
+  gui/                 Qt app: sidebar window, Devices and This computer pages, viewer,
+                       theme (light/dark stylesheet), icons, custom widgets
   protocol.py          message and frame formats
   security.py          certificates, password proofs, LAN checks
   discovery.py, wol.py, autostart.py, cli.py

@@ -4,33 +4,39 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QAction,
+    QActionGroup,
     QColor,
+    QFont,
     QGuiApplication,
     QImage,
     QKeyEvent,
     QMouseEvent,
     QPainter,
     QPainterPath,
+    QPen,
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
     QComboBox,
-    QLabel,
+    QFrame,
+    QHBoxLayout,
     QMainWindow,
     QMenu,
     QMessageBox,
-    QToolBar,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
 from raven.client.session import RemoteSession
 from raven.config import RemoteHost, local_os
 from raven.gui.async_bridge import AsyncRunner
+from raven.gui import icons
 from raven.gui.keymap import key_name, swap_command_and_control
+from raven.gui.theme import theme
+from raven.gui.widgets import Avatar, IconButton, StatusDot, Toast, button, label
 
 QUALITY_PRESETS = {
     "Fast": {"max_width": 1280, "quality": 50, "fps": 20},
@@ -92,7 +98,7 @@ class ScreenView(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(24, 24, 27))
+        p.fillRect(self.rect(), QColor(11, 13, 17))
         rect = self.image_rect()
         if not rect.isNull():
             p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -103,13 +109,37 @@ class ScreenView(QWidget):
             if cx >= 0 and not self.underMouse():
                 self._draw_cursor(p, QPointF(rect.x() + cx * rect.width(), rect.y() + cy * rect.height()))
         if self.message:
-            p.setPen(QColor(230, 230, 235))
-            font = p.font()
-            font.setPointSize(font.pointSize() + 3)
-            p.setFont(font)
             if not rect.isNull():
                 p.fillRect(self.rect(), QColor(0, 0, 0, 150))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, self.message)
+            self._draw_message(p)
+
+    def _draw_message(self, p: QPainter) -> None:
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = p.font()
+        font.setPointSizeF(font.pointSizeF() + 1.5)
+        font.setWeight(QFont.Weight.DemiBold)
+        p.setFont(font)
+        metrics = p.fontMetrics()
+        text_rect = metrics.boundingRect(QRect(0, 0, 420, 1000), Qt.TextFlag.TextWordWrap, self.message)
+        box = QRectF(0, 0, text_rect.width() + 72, max(text_rect.height(), 20) + 32)
+        box.moveCenter(QRectF(self.rect()).center())
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(28, 31, 40, 235))
+        p.drawRoundedRect(box, box.height() / 2 if box.height() < 60 else 16, box.height() / 2 if box.height() < 60 else 16)
+        # A small spinner arc while connecting.
+        if self.image is None:
+            angle = (time.monotonic() * 360) % 360
+            pen = QPen(QColor(124, 108, 255), 2.4)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            arc = QRectF(box.left() + 20, box.center().y() - 8, 16, 16)
+            p.drawArc(arc, int(-angle * 16), 270 * 16)
+            QTimer.singleShot(16, self.update)
+        p.setPen(QColor(232, 234, 240))
+        p.drawText(box.adjusted(44 if self.image is None else 24, 0, -24, 0),
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap,
+                   self.message)
 
     @staticmethod
     def _draw_cursor(p: QPainter, at: QPointF) -> None:
@@ -227,10 +257,51 @@ class ScreenView(QWidget):
         super().focusOutEvent(event)
 
 
+class _OverlayCard(QFrame):
+    """Centred card shown over the screen when the connection drops."""
+
+    def __init__(self, parent: QWidget, on_reconnect, on_close):
+        super().__init__(parent)
+        self.setObjectName("overlayCard")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(28, 26, 28, 22)
+        v.setSpacing(10)
+        v.addWidget(Avatar("plug", 48, 24), 0, Qt.AlignmentFlag.AlignHCenter)
+        self.title = label("Disconnected", "h2")
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(self.title)
+        self.reason = label("", "muted", wrap=True)
+        self.reason.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(self.reason)
+        v.addSpacing(6)
+        row = QHBoxLayout()
+        close = button("Close", "ghost")
+        close.clicked.connect(on_close)
+        again = button("Reconnect", "primary", "restart")
+        again.clicked.connect(on_reconnect)
+        row.addWidget(close)
+        row.addWidget(again)
+        v.addLayout(row)
+        self.setFixedWidth(340)
+        self.hide()
+
+    def show_reason(self, reason: str) -> None:
+        self.reason.setText(reason)
+        self.adjustSize()
+        self.recenter()
+        self.raise_()
+        self.show()
+
+    def recenter(self) -> None:
+        parent = self.parentWidget()
+        self.move((parent.width() - self.width()) // 2, (parent.height() - self.height()) // 2)
+
+
 class ViewerWindow(QMainWindow):
     frame_ready = Signal(QImage, tuple)
     message_received = Signal(dict)
     closed = Signal(str)
+    reconnect_requested = Signal()
 
     def __init__(self, runner: AsyncRunner, session: RemoteSession, remote: RemoteHost, info: dict):
         super().__init__()
@@ -239,30 +310,42 @@ class ViewerWindow(QMainWindow):
         self.remote = remote
         self.info = info
         self.connected = True
+        self.quality = "Balanced"
+        self.monitor = (info.get("monitors") or [{"index": 1}])[0]["index"]
         self._frames = 0
         self._frame_clock = time.monotonic()
         self.setWindowTitle(f"{remote.name or remote.address} — Raven")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
-        self.view = ScreenView(self)
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._build_bar())
+        self.view = ScreenView()
         self.view.send.connect(self._send)
-        self.setCentralWidget(self.view)
-        self._build_toolbar()
-        self.fps_label = QLabel()
-        self.statusBar().addPermanentWidget(self.fps_label)
-        self.statusBar().showMessage(f"Connected to {remote.name} ({remote.address})")
+        layout.addWidget(self.view, 1)
+        self.setCentralWidget(central)
+        self.view.swap_cmd_ctrl = self.swap.isChecked()
+        if not self.info.get("allow_input", True):
+            self.view_only.setChecked(True)
+            self.view_only.setEnabled(False)
+            self.view_only.setToolTip("Mouse and keyboard control is turned off on that computer")
+
+        self.toast = Toast(self.view)
+        self.overlay = _OverlayCard(self.view, self._reconnect, self.close)
 
         self.frame_ready.connect(self.view.set_frame)
+        self.frame_ready.connect(self._count_frame)
         self.message_received.connect(self._on_message)
         self.closed.connect(self._on_closed)
         self._fps_timer = QTimer(self, interval=1000)
-        self._fps_timer.timeout.connect(self._update_fps)
+        self._fps_timer.timeout.connect(self._update_stats)
         self._fps_timer.start()
 
         screen = QGuiApplication.primaryScreen().availableGeometry()
         self.resize(int(screen.width() * 0.8), int(screen.height() * 0.8))
 
-        self.frame_ready.connect(self._count_frame)
         runner.submit(self._start_receiving())
         self._start_stream()
         self.view.setFocus()
@@ -296,61 +379,91 @@ class ViewerWindow(QMainWindow):
     def _count_frame(self, *_):
         self._frames += 1
 
-    def _build_toolbar(self) -> None:
-        bar = QToolBar("Remote")
-        bar.setMovable(False)
-        bar.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.addToolBar(bar)
+    # ---------------------------------------------------------- top bar
 
-        self.monitor_box = QComboBox()
-        for m in self.info.get("monitors", []):
-            self.monitor_box.addItem(f"Display {m['index']} ({m['width']}×{m['height']})", m["index"])
-        self.monitor_box.currentIndexChanged.connect(lambda _: self._start_stream())
-        self.monitor_box.setEnabled(self.monitor_box.count() > 1)
-        bar.addWidget(self.monitor_box)
+    def _build_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setObjectName("viewerBar")
+        bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        bar.setFixedHeight(52)
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(14, 0, 10, 0)
+        h.setSpacing(4)
 
-        self.quality_box = QComboBox()
-        self.quality_box.addItems(list(QUALITY_PRESETS))
-        self.quality_box.setCurrentText("Balanced")
-        self.quality_box.currentIndexChanged.connect(lambda _: self._start_stream())
-        bar.addWidget(self.quality_box)
-        bar.addSeparator()
+        self.state_dot = StatusDot("warning", 7)
+        h.addWidget(self.state_dot)
+        h.addSpacing(4)
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        names.setContentsMargins(0, 8, 0, 8)
+        names.addWidget(label(self.remote.name or self.remote.address, "h3"))
+        self.stats = label("Connecting…", "muted")
+        names.addWidget(self.stats)
+        h.addLayout(names)
+        h.addStretch()
 
-        self.view_only = QAction("View only", self, checkable=True)
+        def tool(name, tip, checkable=False):
+            b = IconButton(name, tip, size=36, icon_size=18, checkable=checkable, fixed_color="#aab1c3")
+            h.addWidget(b)
+            return b
+
+        monitors = self.info.get("monitors", [])
+        if len(monitors) > 1:
+            self.display_box = QComboBox()
+            self.display_box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            for m in monitors:
+                self.display_box.addItem(f"Display {m['index']}  ·  {m['width']}×{m['height']}", m["index"])
+            self.display_box.currentIndexChanged.connect(self._display_changed)
+            h.addWidget(self.display_box)
+            h.addSpacing(8)
+
+        quality = tool("sliders", "Picture quality")
+        quality_menu = QMenu(quality)
+        self.quality_actions = QActionGroup(self)
+        for name, preset in QUALITY_PRESETS.items():
+            act = quality_menu.addAction(f"{name}  ·  up to {preset['max_width']}px, {preset['fps']} fps")
+            act.setCheckable(True)
+            act.setChecked(name == self.quality)
+            act.triggered.connect(lambda _=False, n=name: self._set_quality(n))
+            self.quality_actions.addAction(act)
+        quality.setMenu(quality_menu)
+        quality.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+
+        self.view_only = tool("eye", "View only — don't send mouse or keyboard", checkable=True)
         self.view_only.toggled.connect(self._set_view_only)
-        if not self.info.get("allow_input", True):
-            self.view_only.setChecked(True)
-            self.view_only.setEnabled(False)
-            self.view_only.setToolTip("Mouse and keyboard control is turned off on that computer.")
-        bar.addAction(self.view_only)
 
-        self.swap = QAction("Swap ⌘/Ctrl", self, checkable=True)
-        self.swap.setToolTip("Press Command on a Mac to send Control to a PC, and vice versa.")
-        remote_mac = self.remote.os == "macos"
-        self.swap.setChecked(remote_mac != (local_os() == "macos"))
+        self.swap = tool("command", "Swap ⌘ and Ctrl between Mac and PC", checkable=True)
+        self.swap.setChecked((self.remote.os == "macos") != (local_os() == "macos"))
         self.swap.toggled.connect(lambda on: setattr(self.view, "swap_cmd_ctrl", on))
-        self.view.swap_cmd_ctrl = self.swap.isChecked()
-        bar.addAction(self.swap)
 
-        paste = QAction("Type clipboard", self)
-        paste.setToolTip("Type the text on your clipboard into the remote computer.")
-        paste.triggered.connect(self._type_clipboard)
-        bar.addAction(paste)
-        bar.addSeparator()
+        paste = tool("clipboard", "Type your clipboard text on the remote computer")
+        paste.clicked.connect(self._type_clipboard)
 
-        full = QAction("Full screen", self, checkable=True)
-        full.toggled.connect(lambda on: self.showFullScreen() if on else self.showNormal())
-        bar.addAction(full)
+        self.full = tool("maximize", "Full screen", checkable=True)
+        self.full.toggled.connect(self._set_fullscreen)
 
-        power_menu = QMenu(self)
-        for action, label in POWER_LABELS.items():
-            power_menu.addAction(label, lambda a=action: self._power(a))
-        power_button = QToolButton()
-        power_button.setText("Power")
-        power_button.setMenu(power_menu)
-        power_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        power_button.setEnabled(self.info.get("allow_power", True))
-        bar.addWidget(power_button)
+        sep = QFrame()
+        sep.setFixedSize(1, 22)
+        sep.setStyleSheet("background: #2a2f3b;")
+        h.addSpacing(6)
+        h.addWidget(sep)
+        h.addSpacing(6)
+
+        power = tool("power", "Power")
+        power_menu = QMenu(power)
+        for action, icon_name in (("sleep", "moon"), ("lock", "lock"), ("restart", "restart"), ("shutdown", "power")):
+            act = power_menu.addAction(POWER_LABELS[action], lambda a=action: self._power(a))
+            act.setIcon(icons.icon(icon_name, theme.palette.text, 16))
+        power.setMenu(power_menu)
+        power.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        power.setEnabled(self.info.get("allow_power", True))
+        if not power.isEnabled():
+            power.setToolTip("Power controls are turned off on that computer")
+
+        disconnect = tool("x", "Disconnect")
+        disconnect.fixed_color = "#f87171"
+        disconnect.clicked.connect(self.close)
+        return bar
 
     # ---------------------------------------------------------- actions
 
@@ -359,30 +472,51 @@ class ViewerWindow(QMainWindow):
             self.runner.submit(self.session.send(msg))
 
     def _start_stream(self) -> None:
-        preset = QUALITY_PRESETS[self.quality_box.currentText()]
-        monitor = self.monitor_box.currentData() or 1
-        self._send({"type": "stream_start", "monitor": monitor, **preset})
+        preset = QUALITY_PRESETS[self.quality]
+        self._send({"type": "stream_start", "monitor": self.monitor, **preset})
+
+    def _display_changed(self, _index: int) -> None:
+        self.monitor = self.display_box.currentData()
+        self._start_stream()
+        self.view.setFocus()
+
+    def _set_quality(self, name: str) -> None:
+        self.quality = name
+        self._start_stream()
+        self.toast.show_message(f"Quality: {name}", "info", 1500)
 
     def _set_view_only(self, on: bool) -> None:
         if on:
             self.view.release_all()
         self.view.input_enabled = not on
+        self.view_only.set_icon_name("eye-off" if on else "eye")
+        self.toast.show_message("View only — input paused" if on else "Control resumed", "info", 1500)
+
+    def _set_fullscreen(self, on: bool) -> None:
+        self.full.set_icon_name("minimize" if on else "maximize")
+        self.showFullScreen() if on else self.showNormal()
+        self.view.setFocus()
 
     def _type_clipboard(self) -> None:
         text = QGuiApplication.clipboard().text()
         if text:
             self._send({"type": "type_text", "text": text[:10_000]})
+            self.toast.show_message(f"Typed {len(text[:10_000])} characters", "success", 1800)
+        else:
+            self.toast.show_message("Your clipboard has no text", "info", 1800)
         self.view.setFocus()
 
     def _power(self, action: str) -> None:
-        label = POWER_LABELS[action]
+        name = POWER_LABELS[action]
         if action in ("restart", "shutdown"):
-            answer = QMessageBox.question(
-                self, label, f"{label} {self.remote.name}? Unsaved work there may be lost."
-            )
+            answer = QMessageBox.question(self, name, f"{name} {self.remote.name}? Unsaved work there may be lost.")
             if answer != QMessageBox.StandardButton.Yes:
                 return
         self._send({"type": "power", "action": action})
+
+    def _reconnect(self) -> None:
+        self.reconnect_requested.emit()
+        self.close()
 
     def _on_message(self, msg: dict) -> None:
         kind = msg.get("type")
@@ -391,31 +525,38 @@ class ViewerWindow(QMainWindow):
         elif kind == "error":
             self.view.set_message(msg.get("error", "Error"))
         elif kind == "stream_info":
-            self.statusBar().showMessage(
-                f"{self.remote.name}: display {msg.get('monitor')} at {msg.get('width')}×{msg.get('height')}"
-            )
+            self.state_dot.set_role("success")
         elif kind == "power_result":
             action = POWER_LABELS.get(msg.get("action"), msg.get("action"))
             if msg.get("ok"):
-                self.statusBar().showMessage(f"{action} sent to {self.remote.name}.")
+                self.toast.show_message(f"{action} sent to {self.remote.name}", "success")
             else:
-                QMessageBox.warning(self, "Power", f"{action} failed: {msg.get('error', 'unknown error')}")
+                self.toast.show_message(f"{action} failed: {msg.get('error', 'unknown error')}", "error", 6000)
 
     def _on_closed(self, reason: str) -> None:
         if not self.connected:
             return
         self.connected = False
         self.view.input_enabled = False
-        self.view.set_message(f"Disconnected\n{reason}")
-        self.statusBar().showMessage("Disconnected")
+        self.view.set_message("")
+        self.state_dot.set_role("danger")
+        self.stats.setText("Disconnected")
+        if reason.rstrip(".") in ("Disconnected", "Closed", ""):
+            reason = f"The connection to {self.remote.name or self.remote.address} ended."
+        self.overlay.show_reason(reason)
 
-    def _update_fps(self) -> None:
+    def _update_stats(self) -> None:
         now = time.monotonic()
         fps = self._frames / max(now - self._frame_clock, 0.001)
         self._frames, self._frame_clock = 0, now
         image = self.view.image
         if image is not None and self.connected:
-            self.fps_label.setText(f"{fps:.0f} fps · {image.width()}×{image.height()}")
+            self.stats.setText(f"{self.remote.address}  ·  {fps:.0f} fps  ·  {image.width()}×{image.height()}")
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self.overlay.isVisible():
+            self.overlay.recenter()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._alive = False

@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
-    QDialogButtonBox,
-    QLabel,
+    QFrame,
+    QHBoxLayout,
     QLineEdit,
-    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
@@ -20,30 +20,84 @@ from raven import security
 from raven.client.session import AuthError, RavenError, RemoteSession
 from raven.config import RemoteHost, SettingsStore
 from raven.gui.async_bridge import AsyncRunner
+from raven.gui.widgets import Avatar, button, label
 
 MAX_PASSWORD_TRIES = 3
 
 
-class PasswordDialog(QDialog):
-    def __init__(self, parent: QWidget, host_name: str, error: str = ""):
+class _Dialog(QDialog):
+    """Header with an icon tile, a body, and right-aligned buttons."""
+
+    def __init__(self, parent: QWidget, title: str, subtitle: str, icon_name: str, role: str = "accent"):
         super().__init__(parent)
-        self.setWindowTitle("Password")
-        layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(f"Enter the Raven password for <b>{_html(host_name)}</b>:"))
+        self.setWindowTitle(title)
+        self.setMinimumWidth(420)
+        self.body = QVBoxLayout(self)
+        self.body.setContentsMargins(24, 22, 24, 20)
+        self.body.setSpacing(14)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        head.addWidget(Avatar(icon_name, 44, 22, role), 0, Qt.AlignmentFlag.AlignTop)
+        titles = QVBoxLayout()
+        titles.setSpacing(3)
+        titles.addWidget(label(title, "h2"))
+        titles.addWidget(label(subtitle, "muted", wrap=True))
+        head.addLayout(titles, 1)
+        self.body.addLayout(head)
+
+    def add_buttons(self, ok_text: str, cancel_text: str = "Cancel", kind: str = "primary"):
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel = button(cancel_text, "ghost")
+        cancel.clicked.connect(self.reject)
+        ok = button(ok_text, kind)
+        ok.setDefault(True)
+        ok.clicked.connect(self.accept)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        self.body.addLayout(row)
+        return ok
+
+
+class PasswordDialog(_Dialog):
+    def __init__(self, parent: QWidget, host_name: str, error: str = ""):
+        super().__init__(parent, f"Connect to {host_name}",
+                         "Enter the Raven password set on that computer.", "lock")
+        self.password = QLineEdit(echoMode=QLineEdit.EchoMode.Password, placeholderText="Password")
+        self.body.addWidget(self.password)
         if error:
-            err = QLabel(error)
-            err.setStyleSheet("color: #c0392b;")
-            layout.addWidget(err)
-        self.password = QLineEdit()
-        self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addWidget(self.password)
+            self.body.addWidget(label(error, "error"))
         self.remember = QCheckBox("Remember on this computer")
         self.remember.setChecked(True)
-        layout.addWidget(self.remember)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.body.addWidget(self.remember)
+        self.add_buttons("Connect")
+        self.password.setFocus()
+
+
+class TrustDialog(_Dialog):
+    """Show the host's fingerprint so the user can compare it before trusting."""
+
+    def __init__(self, parent: QWidget, host_name: str, fingerprint: str, changed: bool):
+        if changed:
+            super().__init__(
+                parent, "Identity changed",
+                f"{host_name} presented a different identity than last time. This is expected only if "
+                "Raven was reinstalled or reset there; otherwise someone may be impersonating it.",
+                "alert", "warning")
+        else:
+            super().__init__(
+                parent, f"New device: {host_name}",
+                "Check that this fingerprint matches the one on that computer's “This computer” page.",
+                "shield")
+        chip = QFrame()
+        chip.setObjectName("chip")
+        v = QVBoxLayout(chip)
+        v.setContentsMargins(14, 10, 14, 10)
+        v.addWidget(label("Fingerprint", "muted"))
+        v.addWidget(label(fingerprint, "fingerprint", selectable=True))
+        self.body.addWidget(chip)
+        self.add_buttons("Trust new identity" if changed else "It matches, continue",
+                         kind="danger" if changed else "primary")
 
 
 class ConnectFlow:
@@ -111,27 +165,8 @@ class ConnectFlow:
         short = security.short_fingerprint(hello.fingerprint)
         if hello.fingerprint in (known, self.trusted_fingerprint):
             return True
-        if known:
-            answer = QMessageBox.warning(
-                self.parent,
-                "Identity changed",
-                f"<b>{_html(hello.name)}</b> presented a different identity than last time.<br><br>"
-                "This is expected only if Raven was reinstalled or its settings were reset on that "
-                "computer. Otherwise someone on your network may be impersonating it.<br><br>"
-                f"New fingerprint: <tt>{short}</tt><br><br>Trust the new identity?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-        else:
-            answer = QMessageBox.question(
-                self.parent,
-                "New computer",
-                f"Connecting to <b>{_html(hello.name)}</b> for the first time.<br><br>"
-                f"Fingerprint: <tt>{short}</tt><br><br>"
-                "Check that it matches the fingerprint shown in Raven on that computer "
-                "(This computer tab). Continue?",
-            )
-        if answer != QMessageBox.StandardButton.Yes:
+        dialog = TrustDialog(self.parent, hello.name or self.remote.address, short, changed=bool(known))
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
         self.trusted_fingerprint = hello.fingerprint
         return True
@@ -166,6 +201,3 @@ class ConnectFlow:
 
         self.runner.run(self.session.authenticate(key), done, failed)
 
-
-def _html(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
