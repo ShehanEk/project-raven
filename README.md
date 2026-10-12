@@ -237,13 +237,9 @@ Settings and certificates live in `%APPDATA%\Raven` (Windows),
 | [Tech stack](docs/TECH_STACK.md) | Libraries and versions, OS APIs used per platform, why each technology was chosen, licensing notes for distributors |
 | [Building](docs/BUILDING.md) | How to build the Windows and macOS apps yourself, first-run steps, troubleshooting |
 
-The project website lives in [`site/`](site/). The `pages` workflow publishes it to
-GitHub Pages at <https://shehanek.github.io/project-raven/> whenever it changes on
-`main` (once Pages is enabled with source *GitHub Actions*).
-
-It is also deployed on Vercel: `vercel.json` tells Vercel to serve `site/` as-is (no
-install or build step), so a Vercel project linked to this repository publishes it on
-every push.
+The project website lives in [`site/`](site/) and is deployed on Vercel at
+<https://project-raven-nine.vercel.app>: `vercel.json` tells Vercel to serve `site/` as-is
+(no install or build step), so the linked Vercel project publishes it on every push.
 
 ## Development
 
