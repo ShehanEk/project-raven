@@ -54,8 +54,17 @@ pip install -e .
 raven            # or: python -m raven
 ```
 
-Ready-made builds: the `build` GitHub Actions workflow produces `Raven-Windows.zip`
-(`Raven.exe`) and `Raven-macOS.zip` (`Raven.app`) as artifacts. To build locally:
+Ready-made apps: download `Raven-Windows.zip` (`Raven.exe`) or `Raven-macOS.zip`
+(`Raven.app`) from the [latest release](https://github.com/ShehanEk/project-raven/releases/latest)
+or the project website. They aren't code-signed yet: on Windows choose *More info → Run anyway*
+in SmartScreen, on macOS right-click the app and choose *Open* the first time.
+
+Step-by-step instructions for building each app yourself are in
+[docs/BUILDING.md](docs/BUILDING.md).
+
+To publish a release, push a version tag (`git tag v0.1.0 && git push origin v0.1.0`). The
+`build` workflow tests, builds both apps and attaches the zips to a GitHub Release; the website
+links to `releases/latest/download/`, so the file names must not change. To build locally:
 
 ```bash
 pip install -e ".[dev]"
@@ -226,6 +235,7 @@ Settings and certificates live in `%APPDATA%\Raven` (Windows),
 | [Architecture](docs/ARCHITECTURE.md) | Components and code map, threading model, connection lifecycle, how streaming, input, power, file transfer, clipboard sync and discovery work, the security model, settings, UI structure, design decisions, how to extend Raven |
 | [Protocol](docs/PROTOCOL.md) | Every message and binary format on the wire, the handshake and proof, limits, close codes, mDNS and Wake-on-LAN formats |
 | [Tech stack](docs/TECH_STACK.md) | Libraries and versions, OS APIs used per platform, why each technology was chosen, licensing notes for distributors |
+| [Building](docs/BUILDING.md) | How to build the Windows and macOS apps yourself, first-run steps, troubleshooting |
 
 The project website lives in [`site/`](site/). The `pages` workflow publishes it to
 GitHub Pages at <https://shehanek.github.io/project-raven/> whenever it changes on
