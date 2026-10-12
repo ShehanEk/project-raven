@@ -231,6 +231,10 @@ The project website lives in [`site/`](site/). The `pages` workflow publishes it
 GitHub Pages at <https://shehanek.github.io/project-raven/> whenever it changes on
 `main` (once Pages is enabled with source *GitHub Actions*).
 
+It is also deployed on Vercel: `vercel.json` tells Vercel to serve `site/` as-is (no
+install or build step), so a Vercel project linked to this repository publishes it on
+every push.
+
 ## Development
 
 ```bash
