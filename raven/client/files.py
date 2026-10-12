@@ -13,7 +13,13 @@ from pathlib import Path
 
 from raven import protocol
 from raven.client.session import RavenError, RemoteSession
-from raven.host.files import CHUNK_SIZE, sanitize_name, unique_path
+from raven.host.files import CHUNK_SIZE, FileError, move_into_place, open_part_file, unique_path
+from raven.host.files import sanitize_name as _sanitize_name
+
+# A host can describe any folder tree it likes; stop at sizes no real
+# download needs instead of recursing forever.
+MAX_DEPTH = 32
+MAX_ENTRIES = 100_000
 
 
 @dataclass
@@ -41,6 +47,14 @@ class Progress:
 
 
 ProgressCallback = Callable[[Progress], None]
+
+
+def sanitize_name(name: object) -> str:
+    """A safe local name for something the host named; RavenError if none."""
+    try:
+        return _sanitize_name(str(name))
+    except FileError as exc:
+        raise RavenError(f"Skipped an item with an unsafe name: {str(name)[:40]!r}") from exc
 
 
 class FileClient:
@@ -168,10 +182,18 @@ class FileClient:
 
     async def _plan_download(self, item: dict, rel: tuple[str, ...], plan: list) -> None:
         here = (*rel, item["name"])
+        if len(here) > MAX_DEPTH:
+            raise RavenError("That folder is nested too deeply to download.")
+        if len(plan) >= MAX_ENTRIES:
+            raise RavenError("That folder has too many items to download at once.")
         plan.append((item, here))
         if item["dir"]:
             listing = await self.list(item["path"])
             for child in listing["entries"]:
+                # Don't follow links to other folders inside a download: they
+                # can point back up the tree and never end.
+                if child.get("dir") and child.get("link"):
+                    continue
                 await self._plan_download(child, here, plan)
 
     async def _download_file(self, item: dict, local_dir: Path, progress: Progress,
@@ -179,14 +201,15 @@ class FileClient:
         session = self.session
         tid = session.new_transfer_id()
         queue = session.open_transfer(tid)
-        target = unique_path(local_dir, sanitize_name(item["name"]))
-        part = target.with_name(f".{target.name}.raven-part")
+        name = sanitize_name(item["name"])
         progress.current = item["name"]
+        part = None
         hasher = hashlib.sha256()
         received = 0
         try:
             await session.request({"type": "fs_download", "path": item["path"], "tid": tid})
-            with open(part, "wb") as handle:
+            part, handle = await asyncio.to_thread(open_part_file, local_dir, name)
+            with handle:
                 while True:
                     message = await queue.get()
                     if isinstance(message, bytes):
@@ -201,12 +224,13 @@ class FileClient:
                     if message.get("sha256") != hasher.hexdigest() or message.get("size") != received:
                         raise RavenError(f"{item['name']} was damaged in transfer. Please try again.")
                     break
-            os.replace(part, target)
+            target = await asyncio.to_thread(move_into_place, part, local_dir, name)
         except BaseException:
             with contextlib.suppress(Exception):
                 await session.send({"type": "fs_cancel", "tid": tid})
-            with contextlib.suppress(OSError):
-                part.unlink(missing_ok=True)
+            if part is not None:
+                with contextlib.suppress(OSError):
+                    part.unlink(missing_ok=True)
             raise
         finally:
             session.close_transfer(tid)

@@ -13,6 +13,7 @@ from zeroconf.asyncio import AsyncZeroconf
 from raven import PROTOCOL_VERSION, SERVICE_TYPE
 from raven.config import local_os
 from raven.platform import netinfo
+from raven.security import clean_display_name
 
 log = logging.getLogger(__name__)
 
@@ -86,13 +87,14 @@ class Browser:
         if not addresses:
             return
         props = {k.decode(): (v or b"").decode(errors="replace") for k, v in info.properties.items()}
+        os_name = props.get("os", "")
         self.on_found(DiscoveredHost(
             service_name=name,
-            name=props.get("name") or name.removesuffix("." + SERVICE_TYPE),
+            name=clean_display_name(props.get("name") or name.removesuffix("." + SERVICE_TYPE)),
             address=addresses[0],
             port=info.port,
-            os=props.get("os", ""),
-            fingerprint=props.get("fp", ""),
+            os=os_name if os_name in ("windows", "macos", "linux") else "",
+            fingerprint=props.get("fp", "")[:95],
         ))
 
     def close(self) -> None:

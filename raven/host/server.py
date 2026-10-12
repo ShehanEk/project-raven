@@ -117,47 +117,50 @@ class HostServer:
     async def _handle(self, ws: ServerConnection) -> None:
         address = ws.remote_address[0]
         host = self.store.settings.host
-        if self.limiter.is_locked(address):
-            await self._refuse(ws, "Too many failed attempts. Try again in a minute.")
-            return
         if not host.has_password:
             await self._refuse(ws, "Remote control is not set up on this computer.")
             return
-
-        nonce = security.new_nonce()
-        await ws.send(protocol.encode({
-            "type": "hello",
-            "version": PROTOCOL_VERSION,
-            "name": host.name,
-            "os": local_os(),
-            "salt": host.password_salt,
-            "iterations": security.PBKDF2_ITERATIONS,
-            "nonce": protocol.b64(nonce),
-        }))
-
-        try:
-            msg = protocol.decode(await asyncio.wait_for(ws.recv(), AUTH_TIMEOUT))
-            proof = protocol.unb64(str(msg.get("proof", "")))
-            ok = msg["type"] == "auth" and security.verify_proof(
-                bytes.fromhex(host.password_verifier), nonce, self.fingerprint, proof
-            )
-        except (asyncio.TimeoutError, ConnectionClosed):
+        # Reserve the attempt before doing anything else, so parallel
+        # connections from one address can't all get a guess in.
+        if not self.limiter.begin(address):
+            await self._refuse(ws, "Too many failed attempts. Try again in a minute.")
             return
-        except ValueError:
-            ok = False
-            msg = {}
 
-        if not ok:
-            self.limiter.record_failure(address)
+        outcome: bool | None = None
+        try:
+            nonce = security.new_nonce()
+            await ws.send(protocol.encode({
+                "type": "hello",
+                "version": PROTOCOL_VERSION,
+                "name": host.name,
+                "os": local_os(),
+                "salt": host.password_salt,
+                "iterations": security.PBKDF2_ITERATIONS,
+                "nonce": protocol.b64(nonce),
+            }))
+            try:
+                msg = protocol.decode(await asyncio.wait_for(ws.recv(), AUTH_TIMEOUT))
+                proof = protocol.unb64(str(msg.get("proof", "")))
+                outcome = msg["type"] == "auth" and security.verify_proof(
+                    bytes.fromhex(host.password_verifier), nonce, self.fingerprint, proof
+                )
+            except (asyncio.TimeoutError, ConnectionClosed):
+                return
+            except ValueError:
+                outcome = False
+                msg = {}
+        finally:
+            self.limiter.finish(address, outcome)
+
+        if not outcome:
             await asyncio.sleep(FAILED_AUTH_DELAY)
             self.on_event("auth_failed", {"address": address})
             await self._refuse(ws, "Wrong password.", result=True)
             return
 
-        self.limiter.record_success(address)
         with contextlib.suppress(AttributeError):
             ws.protocol.max_message_size = MAX_MESSAGE_AFTER_AUTH
-        client_name = str(msg.get("client_name", ""))[:64] or address
+        client_name = security.clean_display_name(msg.get("client_name")) or address
         session = _Session(self, ws, client_name)
         self.sessions.add(session)
         self.on_event("connected", {"address": address, "client": client_name})

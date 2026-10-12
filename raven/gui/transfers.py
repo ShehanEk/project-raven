@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QVBoxLayout, QW
 from raven.client.files import FileClient, Progress
 from raven.client.session import RavenError
 from raven.gui.async_bridge import AsyncRunner
-from raven.gui.widgets import Avatar, IconButton, label
+from raven.gui.widgets import Avatar, IconButton, label, plain_tooltip
 
 
 def human_size(n: float) -> str:
@@ -99,7 +99,7 @@ class TransferRow(QFrame):
         self.detail.setProperty("role", "error")
         self.detail.style().unpolish(self.detail)
         self.detail.style().polish(self.detail)
-        self.detail.setToolTip(message)
+        self.detail.setToolTip(plain_tooltip(message))
         self.action.set_icon_name("x")
         self.action.setToolTip("Dismiss")
         self.finished.emit(False)

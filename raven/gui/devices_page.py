@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QMenu,
-    QMessageBox,
     QScrollArea,
     QSpinBox,
     QVBoxLayout,
@@ -38,8 +37,10 @@ from raven.gui.widgets import (
     IconButton,
     StatusDot,
     button,
+    confirm,
     divider,
     label,
+    plain_tooltip,
 )
 from raven.platform.netinfo import normalize_mac
 
@@ -136,7 +137,7 @@ class DeviceCard(Card):
         names = QVBoxLayout()
         names.setSpacing(3)
         title = label(remote.name or remote.address, "h2")
-        title.setToolTip(title.text())
+        title.setToolTip(plain_tooltip(title.text()))
         names.addWidget(title)
         detail = f"{remote.address}" + (f" · {OS_LABELS[remote.os]}" if remote.os in OS_LABELS else "")
         names.addWidget(label(detail, "muted"))
@@ -342,13 +343,17 @@ class DevicesPage(QWidget):
         self.grid.invalidate()
 
     def _on_found(self, host: DiscoveredHost) -> None:
+        # Advertisements are unauthenticated: they only update what we show,
+        # never a saved device's address (see alternates_for()).
         self.discovered[host.service_name] = host
-        # Follow saved computers to their new address when DHCP moves them.
-        for r in self.store.settings.remotes:
-            if r.fingerprint and r.fingerprint == host.fingerprint and (r.address, r.port) != (host.address, host.port):
-                r.address, r.port = host.address, host.port
-                self.store.save()
         self.refresh()
+
+    def alternates_for(self, remote: RemoteHost) -> list[tuple[str, int]]:
+        """Addresses where discovery saw a host claiming to be ``remote``."""
+        if not remote.fingerprint:
+            return []
+        return [(d.address, d.port) for d in self.discovered.values()
+                if d.fingerprint == remote.fingerprint and (d.address, d.port) != (remote.address, remote.port)]
 
     def _on_lost(self, service_name: str) -> None:
         if self.discovered.pop(service_name, None):
@@ -403,9 +408,8 @@ class DevicesPage(QWidget):
             self.probe_all()
 
     def remove_device(self, remote: RemoteHost) -> None:
-        answer = QMessageBox.question(
-            self, "Remove device", f"Remove {remote.name}? Its saved password is deleted too.")
-        if answer == QMessageBox.StandardButton.Yes and remote in self.store.settings.remotes:
+        if confirm(self, "Remove device", f"Remove {remote.name}? Its saved password is deleted too.") \
+                and remote in self.store.settings.remotes:
             self.store.settings.remotes.remove(remote)
             self.store.save()
             self.refresh()
@@ -434,7 +438,7 @@ class DevicesPage(QWidget):
             if message:
                 self.toast.emit(message, "error")
 
-        ConnectFlow(self, self.runner, self.store, remote, ready, fail).start()
+        ConnectFlow(self, self.runner, self.store, remote, ready, fail, self.alternates_for(remote)).start()
 
     def open_viewer(self, remote: RemoteHost) -> None:
         def ready(session: RemoteSession, info: dict) -> None:
@@ -467,9 +471,8 @@ class DevicesPage(QWidget):
     def power(self, remote: RemoteHost, action: str) -> None:
         label_text = POWER_LABELS[action]
         if action in ("restart", "shutdown"):
-            answer = QMessageBox.question(
-                self, label_text, f"{label_text} {remote.name or remote.address}? Unsaved work there may be lost.")
-            if answer != QMessageBox.StandardButton.Yes:
+            if not confirm(self, label_text,
+                           f"{label_text} {remote.name or remote.address}? Unsaved work there may be lost."):
                 return
 
         def ready(session: RemoteSession, info: dict) -> None:

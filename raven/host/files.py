@@ -7,7 +7,7 @@ switch it off with ``allow_files``.
 Requests (all carry a ``rid`` and get a reply)::
 
     fs_places                         -> {places: [{name, path}], roots: [...]}
-    fs_list {path}                    -> {path, parent, entries: [{name, path, dir, size, mtime, hidden}]}
+    fs_list {path}                    -> {path, parent, entries: [{name, path, dir, link, size, mtime, hidden}]}
     fs_mkdir {parent, name}           -> {path}
     fs_upload_start {dir, name, size, tid} -> {path}   then binary chunks for tid
     fs_upload_end {tid, sha256}       -> {path}
@@ -15,9 +15,10 @@ Requests (all carry a ``rid`` and get a reply)::
     fs_download {path, tid}           -> {name, size}  then chunks, then fs_done {tid, sha256}
     fs_cancel {tid}                   stop a download
 
-Uploads are written to a hidden ``.part`` file and renamed into place only
-after the SHA-256 checksum matches, so a cancelled or broken transfer never
-leaves a half-written file under the real name.
+Uploads are written to their own hidden ``.raven-part`` file and moved into
+place only after the SHA-256 checksum matches, never replacing an existing
+file, so a cancelled, broken or concurrent transfer can't leave a
+half-written or mixed-up file under the real name.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import hashlib
 import logging
 import os
 import re
+import secrets
 import shutil
 import stat
 import string
@@ -37,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from raven import protocol
+from raven.security import strip_invisible
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +58,7 @@ class FileError(Exception):
 
 def sanitize_name(name: str) -> str:
     """Reduce ``name`` to a single safe path component, or raise FileError."""
-    name = str(name).replace("\\", "/").split("/")[-1].strip()
+    name = strip_invisible(str(name)).replace("\\", "/").split("/")[-1].strip()
     name = _WINDOWS_RESERVED.sub("_", name).rstrip(" .")
     if not name or name in (".", ".."):
         raise FileError("Invalid file name.")
@@ -77,6 +80,45 @@ def unique_path(directory: Path, name: str) -> Path:
         candidate = directory / f"{stem} ({n}){dot}{ext}"
         if not candidate.exists():
             return candidate
+    raise FileError("Too many files with that name.")
+
+
+def open_part_file(directory: Path, name: str):
+    """Create a new temporary file for ``name`` in ``directory``.
+
+    Each transfer gets its own file (random suffix, created exclusively), so
+    two transfers of the same name can never write into each other.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for _ in range(100):
+        part = directory / f".{name[:200]}.{secrets.token_hex(6)}.raven-part"
+        try:
+            fd = os.open(part, flags, 0o600)
+        except FileExistsError:
+            continue
+        return part, os.fdopen(fd, "wb")
+    raise FileError("Can't create a temporary file.")
+
+
+def move_into_place(part: Path, directory: Path, name: str) -> Path:
+    """Give ``part`` its final name, never replacing an existing file."""
+    for _ in range(100):
+        target = unique_path(directory, name)
+        try:
+            if sys.platform == "win32":
+                os.rename(part, target)  # refuses to replace on Windows
+            else:
+                os.link(part, target)  # atomic, refuses to replace
+                os.unlink(part)
+            return target
+        except FileExistsError:
+            continue  # someone took that name a moment ago; pick the next
+        except OSError:
+            # Filesystems without hard links (FAT/exFAT, some shares).
+            if sys.platform != "win32" and not target.exists():
+                os.rename(part, target)
+                return target
+            raise
     raise FileError("Too many files with that name.")
 
 
@@ -131,10 +173,15 @@ def list_dir(path: str) -> dict:
                     is_dir = entry.is_dir()
                 except OSError:
                     st, is_dir = None, False  # broken link or no permission
+                try:
+                    is_link = entry.is_symlink() or bool(getattr(entry, "is_junction", lambda: False)())
+                except OSError:
+                    is_link = False
                 entries.append({
                     "name": entry.name,
                     "path": str(Path(entry.path)),
                     "dir": is_dir,
+                    "link": is_link,
                     "size": 0 if is_dir or not st else st.st_size,
                     "mtime": st.st_mtime if st else 0,
                     "hidden": _is_hidden(entry, st),
@@ -244,19 +291,14 @@ class FileService:
             raise FileError("Not enough free space on the other computer.")
         name = sanitize_name(str(msg.get("name", "")))
 
-        def open_part():
-            final = unique_path(directory, name)
-            part = directory / f".{final.name}.raven-part"
-            return final, part, open(part, "wb")
-
         try:
-            final, part, handle = await asyncio.to_thread(open_part)
+            part, handle = await asyncio.to_thread(open_part_file, directory, name)
         except PermissionError as exc:
             raise FileError("No permission to write to that folder.") from exc
         except OSError as exc:
             raise FileError(f"Can't write there: {exc.strerror or exc}") from exc
-        self.uploads[tid] = _Upload(handle, part, final, size, hasher=hashlib.sha256())
-        return {"path": str(final)}
+        self.uploads[tid] = _Upload(handle, part, directory / name, size, hasher=hashlib.sha256())
+        return {"path": str(directory / name)}
 
     async def handle_chunk(self, tid: int, data: bytes) -> None:
         upload = self.uploads.get(tid)
@@ -281,14 +323,8 @@ class FileService:
             await asyncio.to_thread(upload.part_path.unlink, missing_ok=True)
             raise FileError("The file was damaged in transfer. Please try again.")
 
-        def finish() -> Path:
-            final = upload.final_path
-            if final.exists():  # appeared while uploading
-                final = unique_path(final.parent, final.name)
-            os.replace(upload.part_path, final)
-            return final
-
-        final = await asyncio.to_thread(finish)
+        target = upload.final_path
+        final = await asyncio.to_thread(move_into_place, upload.part_path, target.parent, target.name)
         self.on_event("file_received", {"client": self.client_name, "name": final.name, "path": str(final),
                                         "size": upload.size})
         return {"path": str(final)}

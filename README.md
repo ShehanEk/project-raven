@@ -175,14 +175,31 @@ raven wake a4:83:e7:12:34:56     # send Wake-on-LAN
   (HMAC of a fresh nonce with a PBKDF2-derived key), bound to the TLS certificate so it
   can't be relayed. The host stores only the derived key, and "remember password" stores
   the derived key, not the password.
-- **Brute-force protection.** After 5 wrong passwords, that address is locked out for a
-  minute.
+- **No weak proofs.** Controllers refuse a host that asks for fewer than 200,000
+  PBKDF2 rounds, so an impostor can't collect a cheap-to-crack proof of your password.
+  A saved password is only ever used for the exact identity it was saved for. After an
+  identity change you must type the password again.
+- **Brute-force protection.** Each address gets 5 attempts per minute, and the host
+  allows 30 failed attempts per minute in total. An attempt counts from the moment it
+  starts, so sending guesses in parallel doesn't get past the limit.
+- **Discovery can't redirect you.** Network advertisements only show devices. A saved
+  device is only reached at a newly advertised address if that address proves the
+  pinned identity, and only then is the new address remembered.
+- **Names are shown as plain text.** Device names, messages and file names from other
+  computers are never interpreted as HTML. Control and text-direction characters are
+  removed, so a file can't pose as `exe.png` when it's really `.exe`.
 - **Host stays in charge.** The host can turn off mouse/keyboard control, power
   commands, file transfer or clipboard sync. It sees an activity log with a notification for every
   connection and every file it receives, and can disconnect everyone.
 - **File access** has the same rights as the logged-in user on the host. Someone who can
   control the mouse and keyboard could reach those files anyway. Uploaded file names are
   reduced to a single safe name, so a name can't place a file outside the chosen folder.
+  Transfers never replace an existing file, even when two arrive with the same name at
+  once. Folder downloads skip links to other folders, so a link loop can't run forever.
+
+The `tests/test_attacks.py` suite (attacks against a live host) and
+`tests/test_client_safety.py` (protection of the controller) keep these guarantees from
+regressing.
 
 Settings and certificates live in `%APPDATA%\Raven` (Windows),
 `~/Library/Application Support/Raven` (macOS) or `~/.config/raven` (Linux).

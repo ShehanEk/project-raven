@@ -115,6 +115,7 @@ class ConnectFlow:
         remote: RemoteHost,
         on_ready: Callable[[RemoteSession, dict], None],
         on_fail: Callable[[str], None],
+        alternates: list[tuple[str, int]] | None = None,
     ):
         self.parent = parent
         self.runner = runner
@@ -126,10 +127,41 @@ class ConnectFlow:
         self.last_error = ""
         self.trusted_fingerprint = ""
         self.session: RemoteSession | None = None
+        # Other addresses where discovery saw a host claiming to be this one.
+        # They are only used if the TLS identity matches the pinned one, so an
+        # advertisement on the network can't redirect us to an impostor.
+        self.alternates = [a for a in (alternates or []) if a != (remote.address, remote.port)]
+        self.address = (remote.address, remote.port)
 
     def start(self) -> None:
-        self.session = RemoteSession(self.remote.address, self.remote.port)
-        self.runner.run(self.session.connect(), self._connected, self._failed)
+        self._connect(self.address, list(self.alternates) if self.remote.fingerprint else [])
+
+    def _connect(self, address: tuple[str, int], remaining: list[tuple[str, int]], first_error=None) -> None:
+        self.session = RemoteSession(*address)
+        session = self.session
+
+        def connected(hello) -> None:
+            if address != (self.remote.address, self.remote.port) and hello.fingerprint != self.remote.fingerprint:
+                # Not our computer; never prompt about an unverified address.
+                self.runner.submit(session.close())
+                self._next(remaining, first_error)
+                return
+            self.address = address
+            self._connected(hello)
+
+        def failed(exc: BaseException) -> None:
+            if remaining and isinstance(exc, RavenError):
+                self._next(remaining, first_error or exc)
+            else:
+                self._failed(first_error or exc)
+
+        self.runner.run(session.connect(), connected, failed)
+
+    def _next(self, remaining: list[tuple[str, int]], error) -> None:
+        if remaining:
+            self._connect(remaining[0], remaining[1:], error)
+        else:
+            self._failed(error or RavenError(f"Could not reach {self.remote.name or self.remote.address}."))
 
     def _failed(self, exc: BaseException) -> None:
         self._close()
@@ -145,10 +177,13 @@ class ConnectFlow:
             self.on_fail("")
             return
         remote = self.remote
-        if self.tries == 0 and remote.saved_key and remote.saved_salt == hello.salt.hex():
+        # The saved key is only ever offered to the exact identity it was
+        # saved for; after an identity change the user types the password.
+        if (self.tries == 0 and remote.saved_key and remote.saved_salt == hello.salt.hex()
+                and remote.fingerprint and hello.fingerprint == remote.fingerprint):
             self._authenticate(bytes.fromhex(remote.saved_key), remember=True)
             return
-        dialog = PasswordDialog(self.parent, hello.name or remote.address, self.last_error)
+        dialog = PasswordDialog(self.parent, remote.name or hello.name or remote.address, self.last_error)
         if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.password.text():
             self._close()
             self.on_fail("")
@@ -165,7 +200,9 @@ class ConnectFlow:
         short = security.short_fingerprint(hello.fingerprint)
         if hello.fingerprint in (known, self.trusted_fingerprint):
             return True
-        dialog = TrustDialog(self.parent, hello.name or self.remote.address, short, changed=bool(known))
+        # Name the device by what the user saved, not what the host claims.
+        name = self.remote.name if known and self.remote.name else (hello.name or self.remote.address)
+        dialog = TrustDialog(self.parent, name, short, changed=bool(known))
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
         self.trusted_fingerprint = hello.fingerprint
@@ -179,6 +216,7 @@ class ConnectFlow:
             r.os = info.get("os") or hello.os
             r.mac = info.get("mac") or r.mac
             r.fingerprint = hello.fingerprint
+            r.address, r.port = self.address  # may be a verified new address
             r.saved_key = key.hex() if remember else ""
             r.saved_salt = hello.salt.hex() if remember else ""
             if self.store.settings.find_remote(r.id) is None:

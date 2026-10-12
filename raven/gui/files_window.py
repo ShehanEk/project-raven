@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QMessageBox,
     QScrollArea,
     QTreeWidget,
     QTreeWidgetItem,
@@ -33,7 +32,7 @@ from raven.gui import icons
 from raven.gui.async_bridge import AsyncRunner
 from raven.gui.theme import theme
 from raven.gui.transfers import TransferList, drop_hint, human_size
-from raven.gui.widgets import IconButton, StatusDot, Toast, button, label
+from raven.gui.widgets import IconButton, StatusDot, Toast, button, confirm, label, plain_tooltip
 
 _ENTRY = Qt.ItemDataRole.UserRole
 
@@ -253,7 +252,7 @@ class FilesWindow(QMainWindow):
         item = QListWidgetItem(name)
         item.setData(_ENTRY, path)
         item.setIcon(icons.icon(icon_name, theme.palette.muted, 18))
-        item.setToolTip(path)
+        item.setToolTip(plain_tooltip(path))
         self.places_list.addItem(item)
 
     def navigate(self, path: str, remember: bool = True) -> None:
@@ -411,9 +410,7 @@ class FilesWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         active = self.transfers.active()
         if active and self.connected:
-            answer = QMessageBox.question(
-                self, "Transfers in progress", f"Cancel {len(active)} transfer(s) and close?")
-            if answer != QMessageBox.StandardButton.Yes:
+            if not confirm(self, "Transfers in progress", f"Cancel {len(active)} transfer(s) and close?"):
                 event.ignore()
                 return
         self.transfers.cancel_all()

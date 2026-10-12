@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
     QMenu,
-    QMessageBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -42,7 +41,7 @@ from raven.gui import icons
 from raven.gui.keymap import key_name, swap_command_and_control
 from raven.gui.theme import theme
 from raven.gui.transfers import TransferList, drop_hint
-from raven.gui.widgets import Avatar, IconButton, StatusDot, Toast, button, label
+from raven.gui.widgets import Avatar, IconButton, StatusDot, Toast, button, confirm, label
 
 QUALITY_PRESETS = {
     "Fast": {"max_width": 1280, "quality": 50, "fps": 20},
@@ -654,8 +653,7 @@ class ViewerWindow(QMainWindow):
     def _power(self, action: str) -> None:
         name = POWER_LABELS[action]
         if action in ("restart", "shutdown"):
-            answer = QMessageBox.question(self, name, f"{name} {self.remote.name}? Unsaved work there may be lost.")
-            if answer != QMessageBox.StandardButton.Yes:
+            if not confirm(self, name, f"{name} {self.remote.name}? Unsaved work there may be lost."):
                 return
         self._send({"type": "power", "action": action})
 

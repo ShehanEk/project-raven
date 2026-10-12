@@ -13,6 +13,7 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
+from PySide6 import QtGui
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLayout,
+    QMessageBox,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -33,13 +35,32 @@ from raven.gui.theme import theme
 
 
 def label(text: str = "", role: str | None = None, wrap: bool = False, selectable: bool = False) -> QLabel:
-    lbl = QLabel(text)
+    lbl = QLabel()
+    # Always plain text: names and messages come from other computers, and
+    # Qt would otherwise render anything that looks like HTML (including
+    # <img> tags that make it fetch files, even from network shares).
+    lbl.setTextFormat(Qt.TextFormat.PlainText)
+    lbl.setText(text)
     if role:
         lbl.setProperty("role", role)
     lbl.setWordWrap(wrap)
     if selectable:
         lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     return lbl
+
+
+def plain_tooltip(text: str) -> str:
+    """Tooltips are rich text when they look like HTML; this forces plain."""
+    return QtGui.Qt.convertFromPlainText(text) if text else ""
+
+
+def confirm(parent: QWidget, title: str, text: str) -> bool:
+    """Yes/No question whose text is never interpreted as HTML."""
+    box = QMessageBox(QMessageBox.Icon.Question, title, text,
+                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, parent)
+    box.setTextFormat(Qt.TextFormat.PlainText)
+    box.setDefaultButton(QMessageBox.StandardButton.No)
+    return box.exec() == QMessageBox.StandardButton.Yes
 
 
 def set_role(widget: QWidget, role: str) -> None:
@@ -328,6 +349,7 @@ class Toast(QFrame):
         self.dot = StatusDot("success", 7)
         layout.addWidget(self.dot)
         self.text = QLabel()
+        self.text.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.text)
         self.effect = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self.effect)
