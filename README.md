@@ -54,8 +54,14 @@ pip install -e .
 raven            # or: python -m raven
 ```
 
-Ready-made builds: the `build` GitHub Actions workflow produces `Raven-Windows.zip`
-(`Raven.exe`) and `Raven-macOS.zip` (`Raven.app`) as artifacts. To build locally:
+Ready-made apps: download `Raven-Windows.zip` (`Raven.exe`) or `Raven-macOS.zip`
+(`Raven.app`) from the [latest release](https://github.com/ShehanEk/project-raven/releases/latest)
+or the project website. They aren't code-signed yet: on Windows choose *More info → Run anyway*
+in SmartScreen, on macOS right-click the app and choose *Open* the first time.
+
+To publish a release, push a version tag (`git tag v0.1.0 && git push origin v0.1.0`). The
+`build` workflow tests, builds both apps and attaches the zips to a GitHub Release; the website
+links to `releases/latest/download/`, so the file names must not change. To build locally:
 
 ```bash
 pip install -e ".[dev]"

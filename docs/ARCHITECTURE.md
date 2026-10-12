@@ -496,6 +496,8 @@ is on.
   1. `test`: Ubuntu, Python 3.12, `xvfb-run -a pytest -q`.
   2. `package`: Windows and macOS, PyInstaller, uploads `Raven-Windows.zip` /
      `Raven-macOS.zip` as artifacts. Runs only if `test` passes.
+  3. `release`: only on a `v*` tag. Attaches both zips to a GitHub Release, which the
+     website's download buttons point at (`releases/latest/download/<file>`).
 - **Website** (`.github/workflows/pages.yml`): publishes the static site in `site/`
   (plain HTML and CSS, no build step) to GitHub Pages when it changes on `main`.
 - **Not code-signed.** The bundles aren't signed or notarized yet. macOS needs
