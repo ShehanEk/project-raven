@@ -92,7 +92,10 @@ def _run_host(args) -> int:
         logging.getLogger("raven.host").info("%s %s", kind, detail)
 
     async def serve() -> None:
-        service = HostService(store, on_event=on_event)
+        from raven.platform.clipboard import CommandClipboard
+
+        clipboard = CommandClipboard()
+        service = HostService(store, on_event=on_event, clipboard=clipboard if clipboard.available else None)
         await service.start()
         print(f"Raven host '{host.name}' listening on port {service.server.port}")
         print(f"Certificate fingerprint: {security.short_fingerprint(service.fingerprint)}")

@@ -57,6 +57,32 @@ class FakeInjector:
         self.events.append(("release_all",))
 
 
+class FakeClipboard:
+    """In-memory stand-in for the host's OS clipboard."""
+
+    supports_images = True
+
+    def __init__(self):
+        self.clip = None
+        self.count = 0
+        self.writes = []
+
+    def change_token(self):
+        return self.count
+
+    async def read(self):
+        return self.clip
+
+    async def write(self, clip):
+        self.writes.append(clip)
+        self.local_copy(clip)
+
+    def local_copy(self, clip):
+        """Simulate someone copying something on the host."""
+        self.clip = clip
+        self.count += 1
+
+
 INJECTORS: list[FakeInjector] = []
 PASSWORD = "hunter22"
 
@@ -75,8 +101,10 @@ async def host():
         injector_factory=FakeInjector,
         power_runner=powered.append,
         power_delay=0.05,
+        clipboard=FakeClipboard(),
     )
     server.events, server.powered = events, powered
+    server.clip_backend = server.clipboard.backend
     await server.start(port=0, bind="127.0.0.1")
     yield server
     await server.disconnect_all()

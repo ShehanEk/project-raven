@@ -15,6 +15,8 @@ from websockets.exceptions import ConnectionClosed
 
 from raven import PROTOCOL_VERSION, protocol, security
 from raven.config import SettingsStore, local_os
+from raven.clip import Clip
+from raven.host.clipboard import ClipboardBackend, ClipboardHub
 from raven.host.files import FileError, FileService
 from raven.platform import netinfo, power
 from raven.platform.capture import Monitor, ScreenCapturer
@@ -26,6 +28,9 @@ log = logging.getLogger(__name__)
 EventCallback = Callable[[str, dict], None]
 
 MAX_FRAMES_IN_FLIGHT = 2
+# Before login messages are capped at 1 MiB; afterwards clipboard images and
+# file chunks need more room.
+MAX_MESSAGE_AFTER_AUTH = 32 * 2**20
 AUTH_TIMEOUT = 30.0
 FAILED_AUTH_DELAY = 1.0
 
@@ -42,6 +47,7 @@ class HostServer:
         injector_factory: Callable[[], InputInjector] = InputInjector,
         power_runner: Callable[[str], None] = power.perform,
         power_delay: float = 1.0,
+        clipboard: ClipboardBackend | None = None,
     ):
         self.store = store
         self.on_event = on_event or (lambda kind, detail: None)
@@ -51,6 +57,7 @@ class HostServer:
         self.power_delay = power_delay
         self.cert_path, self.key_path, self.fingerprint = security.ensure_certificate(cert_dir)
         self.limiter = security.AuthRateLimiter()
+        self.clipboard = ClipboardHub(clipboard) if clipboard is not None else None
         self.sessions: set[_Session] = set()
         self._server: Server | None = None
 
@@ -86,6 +93,8 @@ class HostServer:
     async def stop(self) -> None:
         if not self._server:
             return
+        if self.clipboard:
+            await self.clipboard.close()
         server, self._server = self._server, None
         server.close()
         with contextlib.suppress(Exception):
@@ -146,6 +155,8 @@ class HostServer:
             return
 
         self.limiter.record_success(address)
+        with contextlib.suppress(AttributeError):
+            ws.protocol.max_message_size = MAX_MESSAGE_AFTER_AUTH
         client_name = str(msg.get("client_name", ""))[:64] or address
         session = _Session(self, ws, client_name)
         self.sessions.add(session)
@@ -225,6 +236,8 @@ class _Session:
                 "allow_input": self.settings.allow_input,
                 "allow_power": self.settings.allow_power,
                 "allow_files": self.settings.allow_files,
+                "allow_clipboard": self.settings.allow_clipboard and self.server.clipboard is not None,
+                "clipboard_images": bool(self.server.clipboard and self.server.clipboard.backend.supports_images),
             },
         })
         async for raw in self.ws:
@@ -261,6 +274,10 @@ class _Session:
             await self.handle_power(str(msg.get("action", "")), msg.get("rid"))
         elif kind.startswith("fs_"):
             await self.handle_files(msg)
+        elif kind == "clipboard_sync":
+            await self.handle_clipboard_sync(msg)
+        elif kind == "clipboard_set":
+            await self.handle_clipboard_set(msg)
         elif kind in _INPUT_MESSAGES:
             if not self.settings.allow_input:
                 return
@@ -296,6 +313,35 @@ class _Session:
             await self.reply(msg, error=f"File operation failed: {exc}")
         else:
             await self.reply(msg, payload)
+
+    async def handle_clipboard_sync(self, msg: dict) -> None:
+        hub = self.server.clipboard
+        if not msg.get("enabled"):
+            if hub:
+                await hub.unsubscribe(self)
+            await self.reply(msg)
+            return
+        if hub is None:
+            await self.reply(msg, error="This computer can't share its clipboard.")
+        elif not self.settings.allow_clipboard:
+            await self.reply(msg, error="Clipboard sync is turned off on this computer.")
+        else:
+            await hub.subscribe(self, self._push_clip)
+            await self.reply(msg, {"images": hub.backend.supports_images})
+
+    async def _push_clip(self, clip: Clip) -> None:
+        if self.settings.allow_clipboard:
+            await self.send(clip.to_message("clipboard"))
+
+    async def handle_clipboard_set(self, msg: dict) -> None:
+        hub = self.server.clipboard
+        if hub is None or not self.settings.allow_clipboard or self not in hub.subscribers:
+            return
+        try:
+            clip = Clip.from_message(msg)
+        except ValueError:
+            return
+        await hub.apply(clip, origin=self)
 
     async def handle_power(self, action: str, rid=None) -> None:
         extra = {"rid": rid} if isinstance(rid, int) else {}
@@ -388,6 +434,8 @@ class _Session:
                 await self.send({"type": "error", "error": f"Screen capture failed: {exc}"})
 
     async def cleanup(self) -> None:
+        if self.server.clipboard:
+            await self.server.clipboard.unsubscribe(self)
         await self.stop_stream()
         await self.files.close()
         with contextlib.suppress(Exception):

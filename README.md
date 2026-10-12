@@ -6,6 +6,7 @@ Control your own Windows PCs and Macs from each other, **over your local network
 - **Sleep, lock, restart or shut down** a remote computer with one click
 - **Transfer files** both ways: browse the remote computer's folders, download files or
   whole folders, upload into any folder, or drop files onto the remote screen
+- **Clipboard sync**: copy text or an image on one computer, paste it on the other
 - **Wake** a sleeping or powered-off computer with Wake-on-LAN
 - Finds other Raven computers on the network automatically (Bonjour/mDNS)
 - One app on every machine. Each computer can control others, be controlled, or both
@@ -98,6 +99,7 @@ The viewer window's top bar shows the connection's frame rate and resolution, pl
 | Sliders | Fast / Balanced / Sharp: trade image quality for smoothness |
 | Eye | View only: watch without sending mouse or keyboard input |
 | ⌘ | Swap Mac Command ↔ PC Control, so ⌘C copies on a PC (on by default between a Mac and a PC) |
+| Sync arrows | Clipboard sync on/off (on by default) |
 | Files | Opens the file browser for that computer |
 | Clipboard | Types your local clipboard text on the remote computer |
 | Corners | Full screen |
@@ -123,6 +125,25 @@ complete, so a cancelled transfer never leaves half a file behind. Existing file
 never overwritten: a second copy is saved as `name (2).ext`.
 
 ![Files window](docs/screenshots/files-dark.png)
+
+### Clipboard sync
+
+While a viewer window is open, anything you copy on either computer can be pasted on the
+other: text, or an image such as a screenshot. It works whichever window has focus, so
+you can copy in a local app and paste into the remote one, or the reverse. Toggle it
+with the sync-arrows button in the viewer. A short notice appears when something arrives
+from the other computer.
+
+- Only copies made after you connect are shared. Whatever was already on your clipboard
+  stays private.
+- If a copy holds both text and an image (cells from a spreadsheet, for example), the
+  text is sent.
+- Limits are 4 million characters of text and 16 MB per image. Copied *files* aren't
+  synced; use the Files window for those.
+- The host can turn it off (*Clipboard sync* on its *This computer* page). Clipboard
+  contents are never written to the activity log.
+- The headless `raven host` syncs text only, using `pbcopy`/`pbpaste`, PowerShell, or
+  `wl-clipboard`/`xclip`/`xsel` on Linux.
 
 ### Wake-on-LAN (turning computers back on)
 
@@ -157,7 +178,7 @@ raven wake a4:83:e7:12:34:56     # send Wake-on-LAN
 - **Brute-force protection.** After 5 wrong passwords, that address is locked out for a
   minute.
 - **Host stays in charge.** The host can turn off mouse/keyboard control, power
-  commands or file transfer. It sees an activity log with a notification for every
+  commands, file transfer or clipboard sync. It sees an activity log with a notification for every
   connection and every file it receives, and can disconnect everyone.
 - **File access** has the same rights as the logged-in user on the host. Someone who can
   control the mouse and keyboard could reach those files anyway. Uploaded file names are
@@ -191,6 +212,8 @@ raven/
   host/server.py       host: TLS WebSocket server, auth, streaming, input, power
   host/files.py        host: folder listing, uploads, downloads
   client/files.py      controller: upload/download with progress, folders, checksums
+  host/clipboard.py    host: clipboard watcher shared by synced sessions
+  clip.py              clipboard contents on the wire (text / PNG image)
   host/service.py      server + Bonjour advertisement
   client/session.py    controller: connect, verify fingerprint, authenticate
   platform/            capture (mss), inputs (pynput), power, permissions, netinfo

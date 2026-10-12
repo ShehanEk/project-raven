@@ -32,9 +32,11 @@ from PySide6.QtWidgets import (
 )
 
 from raven.client.files import FileClient
+from raven.clip import Clip
 from raven.client.session import RemoteSession
 from raven.config import RemoteHost, local_os
 from raven.gui.async_bridge import AsyncRunner
+from raven.gui.clipboard import ClipboardSync
 from raven.gui.files_window import FilesWindow
 from raven.gui import icons
 from raven.gui.keymap import key_name, swap_command_and_control
@@ -370,6 +372,12 @@ class ViewerWindow(QMainWindow):
         self.toast = Toast(self.view)
         self.overlay = _OverlayCard(self.view, self._reconnect, self.close)
         self.file_client = FileClient(session)
+        self.clipboard = ClipboardSync(self)
+        self.clipboard.outgoing.connect(lambda clip: self._send(clip.to_message("clipboard_set")))
+        self.clipboard.received.connect(
+            lambda clip: self.toast.show_message(f"Copied {clip.describe()} from {self.remote.name}", "info", 1800))
+        if self.info.get("allow_clipboard"):
+            self._set_clipboard_sync(True)
         self.files_window: FilesWindow | None = None
         self.remote_downloads: str | None = None
         self.transfer_card = QFrame(self.view)
@@ -478,6 +486,12 @@ class ViewerWindow(QMainWindow):
 
         self.view_only = tool("eye", "View only — don't send mouse or keyboard", checkable=True)
         self.view_only.toggled.connect(self._set_view_only)
+
+        self.sync_btn = tool("sync", "Sync clipboard — copy on one computer, paste on the other", checkable=True)
+        self.sync_btn.toggled.connect(self._set_clipboard_sync)
+        if not self.info.get("allow_clipboard"):
+            self.sync_btn.setEnabled(False)
+            self.sync_btn.setToolTip("Clipboard sync is turned off on that computer")
 
         self.swap = tool("command", "Swap ⌘ and Ctrl between Mac and PC", checkable=True)
         self.swap.setChecked((self.remote.os == "macos") != (local_os() == "macos"))
@@ -601,6 +615,33 @@ class ViewerWindow(QMainWindow):
             if row.done and row.detail.text() == "Done":
                 row.deleteLater()
 
+    def _set_clipboard_sync(self, on: bool) -> None:
+        if self.sync_btn.isChecked() != on:
+            self.sync_btn.blockSignals(True)
+            self.sync_btn.setChecked(on)
+            self.sync_btn.blockSignals(False)
+        if not self.connected:
+            return
+
+        def done(_reply) -> None:
+            self.clipboard.set_enabled(on)
+            if on and not self.info.get("clipboard_images", True):
+                self.toast.show_message("Clipboard sync on (text only on that computer)", "info", 2500)
+
+        def failed(exc) -> None:
+            self.clipboard.set_enabled(False)
+            self._set_clipboard_sync_button(False)
+            self.toast.show_message(f"Clipboard sync unavailable: {exc}", "error", 4000)
+
+        if not on:
+            self.clipboard.set_enabled(False)
+        self.runner.run(self.session.request({"type": "clipboard_sync", "enabled": on}), done, failed)
+
+    def _set_clipboard_sync_button(self, on: bool) -> None:
+        self.sync_btn.blockSignals(True)
+        self.sync_btn.setChecked(on)
+        self.sync_btn.blockSignals(False)
+
     def _type_clipboard(self) -> None:
         text = QGuiApplication.clipboard().text()
         if text:
@@ -630,6 +671,11 @@ class ViewerWindow(QMainWindow):
             self.view.set_message(msg.get("error", "Error"))
         elif kind == "stream_info":
             self.state_dot.set_role("success")
+        elif kind == "clipboard":
+            try:
+                self.clipboard.receive(Clip.from_message(msg))
+            except ValueError:
+                pass
         elif kind == "power_result":
             action = POWER_LABELS.get(msg.get("action"), msg.get("action"))
             if msg.get("ok"):
@@ -655,7 +701,8 @@ class ViewerWindow(QMainWindow):
         self._frames, self._frame_clock = 0, now
         image = self.view.image
         if image is not None and self.connected:
-            self.stats.setText(f"{self.remote.address}  ·  {fps:.0f} fps  ·  {image.width()}×{image.height()}")
+            rate = f"{fps:.0f} fps" if fps >= 0.5 else "idle"
+            self.stats.setText(f"{self.remote.address}  ·  {rate}  ·  {image.width()}×{image.height()}")
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)

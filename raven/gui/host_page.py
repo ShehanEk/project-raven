@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from raven import autostart, security
 from raven.config import SettingsStore
 from raven.gui.async_bridge import AsyncRunner
+from raven.gui.clipboard import QtClipboardBackend
 from raven.gui.widgets import (
     Avatar,
     Card,
@@ -51,7 +52,8 @@ class HostController(QObject):
         super().__init__()
         self.runner = runner
         self.store = store
-        self.service = HostService(store, on_event=lambda kind, detail: self.event.emit(kind, detail))
+        self.service = HostService(store, on_event=lambda kind, detail: self.event.emit(kind, detail),
+                                   clipboard=QtClipboardBackend(runner.ui))
         self.connected_clients = 0
         self.event.connect(self._track)
 
@@ -240,6 +242,11 @@ class HostPage(QWidget):
         perms.body.addWidget(SettingRow("files", "File transfer",
                                         "Browse this computer's files, and send files to and from it.",
                                         self.allow_files))
+        perms.body.addWidget(divider())
+        self.allow_clipboard = self._switch(host.allow_clipboard, lambda on: self._set("allow_clipboard", on))
+        perms.body.addWidget(SettingRow("sync", "Clipboard sync",
+                                        "Copy on one computer, paste on the other — text and images.",
+                                        self.allow_clipboard))
         perms.body.addWidget(divider())
         self.advertise = self._switch(host.advertise, self._advertise_changed)
         perms.body.addWidget(SettingRow("wifi", "Visible on the network",
